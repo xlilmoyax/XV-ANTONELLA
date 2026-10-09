@@ -1,0 +1,128 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-bosque: #183b2d;
+  --color-bosque-profundo: #0e241b;
+  --color-salvia: #a8b39a;
+  --color-musgo: #68785b;
+  --color-champagne: #d6bd7a;
+  --color-champagne-claro: #ecdcb0;
+  --color-marfil: #f8f4e9;
+  --color-blanco-calido: #fffdf7;
+
+  --font-caligrafica: 'Great Vibes', cursive;
+  --font-serifada: 'Cormorant Garamond', serif;
+  --font-funcional: 'Jost', sans-serif;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bosque-profundo);
+  color: var(--color-marfil);
+  font-family: var(--font-funcional);
+  -webkit-font-smoothing: antialiased;
+}
+
+.font-caligrafica {
+  font-family: var(--font-caligrafica);
+}
+.font-serifada {
+  font-family: var(--font-serifada);
+}
+
+/* ---- Bosque encantado: fondo por capas, liviano y sin imágenes pesadas ---- */
+.bosque-fondo {
+  background:
+    radial-gradient(1200px 500px at 50% -80px, rgba(214, 189, 122, 0.16), transparent 60%),
+    radial-gradient(900px 600px at 85% 30%, rgba(104, 120, 91, 0.35), transparent 65%),
+    radial-gradient(900px 700px at 10% 25%, rgba(104, 120, 91, 0.3), transparent 65%),
+    linear-gradient(180deg, #0e241b 0%, #143327 45%, #183b2d 100%);
+}
+
+.neblina {
+  background: radial-gradient(
+    600px 120px at 50% 100%,
+    rgba(248, 244, 233, 0.1),
+    transparent 70%
+  );
+  filter: blur(2px);
+}
+
+/* Rayos de luz suaves */
+.rayos {
+  background: conic-gradient(
+    from 180deg at 50% -10%,
+    transparent 0deg,
+    rgba(214, 189, 122, 0.07) 8deg,
+    transparent 16deg,
+    transparent 30deg,
+    rgba(214, 189, 122, 0.05) 38deg,
+    transparent 46deg,
+    transparent 60deg,
+    rgba(214, 189, 122, 0.06) 68deg,
+    transparent 76deg
+  );
+}
+
+/* Partículas luminosas flotando (pocas, sutiles) */
+@keyframes flotar {
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.25;
+  }
+  50% {
+    transform: translateY(-18px);
+    opacity: 0.8;
+  }
+}
+.particula {
+  animation: flotar 7s ease-in-out infinite;
+}
+
+/* Brillo dorado para títulos */
+.brillo-dorado {
+  background: linear-gradient(100deg, #b89b52 10%, #f3e6bd 40%, #d6bd7a 60%, #9c8143 90%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Marco elegante */
+.marco-dorado {
+  border: 1px solid rgba(214, 189, 122, 0.55);
+  box-shadow:
+    inset 0 0 0 1px rgba(248, 244, 233, 0.08),
+    0 0 40px rgba(214, 189, 122, 0.12);
+}
+
+.boton-dorado {
+  background: linear-gradient(180deg, #ecdcb0, #d6bd7a 55%, #b89b52);
+  color: #183b2d;
+  letter-spacing: 0.14em;
+}
+.boton-dorado:hover {
+  filter: brightness(1.06);
+}
+.boton-fantasma {
+  border: 1px solid rgba(214, 189, 122, 0.6);
+  color: var(--color-marfil);
+  letter-spacing: 0.14em;
+}
+.boton-fantasma:hover {
+  background: rgba(214, 189, 122, 0.12);
+}
+
+/* Respeta usuarios con movimiento reducido */
+@media (prefers-reduced-motion: reduce) {
+  .particula {
+    animation: none;
+  }
+  html {
+    scroll-behavior: auto;
+  }
+}
