@@ -16,6 +16,7 @@
 
 -- ---------- utilidades ----------
 create extension if not exists "pgcrypto";
+create extension if not exists "citext";
 
 create or replace function xv_touch_updated_at()
 returns trigger language plpgsql as $$
