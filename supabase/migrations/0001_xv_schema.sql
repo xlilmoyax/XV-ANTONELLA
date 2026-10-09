@@ -117,7 +117,8 @@ create table payment_records (
     check (estado in ('no_corresponde','pendiente_pago','pago_informado','pago_verificado','requiere_revision')),
   medio text,
   comprobante_url text,
-  token_accion text not null default encode(gen_random_bytes(24), 'hex'),
+  -- Token único sin depender de pgcrypto (gen_random_uuid es builtin desde PG13).
+  token_accion text not null default replace(gen_random_uuid()::text, '-', ''),
   informado_at timestamptz default now(),
   verificado_at timestamptz,
   created_at timestamptz not null default now(),
