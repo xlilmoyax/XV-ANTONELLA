@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import type { DisenoMap } from '../xv/diseno';
 import { BadgeDollarSign, CalendarClock, Check, Copy, MessageCircle } from 'lucide-react';
 import { whatsappUrl } from '../xv/config';
 import { formatoARS } from '../xv/pricing';
@@ -6,7 +7,7 @@ import { formatearFechaLarga } from '../xv/useEvent';
 import type { EventVM } from '../xv/useEvent';
 import { Seccion } from './EventInfo';
 
-export default function Pagos({ settings }: { settings: EventVM }) {
+export default function Pagos({ settings, diseno }: { settings: EventVM; diseno: DisenoMap }) {
   const [copiado, setCopiado] = useState(false);
 
   const copiarAlias = async () => {
@@ -25,8 +26,8 @@ export default function Pagos({ settings }: { settings: EventVM }) {
   );
 
   return (
-    <Seccion id="pagos" kicker="Confirmar y abonar" titulo="Datos para confirmar y abonar">
-      <div className="marco-dorado rounded-2xl bg-[#0e241b]/60 p-6 text-left space-y-4">
+    <Seccion id="pagos" kicker="Confirmar y abonar" titulo="Datos para confirmar y abonar" fondo="pagos" diseno={diseno}>
+      <div className="panel-lectura rounded-2xl p-6 text-left space-y-4">
         <p className="flex items-start gap-3 font-serifada text-lg text-[#f8f4e9]">
           <BadgeDollarSign size={20} className="text-[#d6bd7a] mt-1 shrink-0" aria-hidden="true" />
           Tarjeta: {formatoARS(settings.precio_tarjeta)} por persona que deba abonar.

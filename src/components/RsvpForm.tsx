@@ -1,4 +1,5 @@
 import { useMemo, useState, type FormEvent } from 'react';
+import type { DisenoMap } from '../xv/diseno';
 import { CheckCircle2, Minus, Plus, Send } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from '../lib/supabaseClient';
 import { whatsappUrl } from '../xv/config';
@@ -14,7 +15,36 @@ interface Acompanante {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
-export default function RsvpForm({ settings }: { settings: EventVM }) {
+export type DestinoModalidad =
+  | { accion: 'omitir' }
+  | { accion: 'usar'; id: string }
+  | { accion: 'detener'; motivo: string };
+
+/**
+ * Clasifica la respuesta de modalidades para el INSERT directo (puro, testeable):
+ * - tabla ausente (42P01/PGRST205/sin caché) = esquema antiguo confirmado → omitir.
+ * - cualquier otro error = detener (no confundir permisos/red/conexión con esquema viejo).
+ * - tabla presente sin fila = configuración incompleta → detener.
+ * La rama 'omitir' es TRANSITORIA: retirar cuando 0007 + frontend verificado
+ * hagan el campo obligatorio en todas las rutas.
+ */
+export function decidirModalidad(
+  error: { code?: string; message?: string } | null,
+  data: { id?: string } | null,
+): DestinoModalidad {
+  if (error) {
+    const msg = `${error.code ?? ''} ${error.message ?? ''}`;
+    if (/42P01|PGRST205|does not exist|schema cache/i.test(msg)) return { accion: 'omitir' };
+    return {
+      accion: 'detener',
+      motivo: `No se pudo verificar la modalidad (${error.code ?? 'sin código'}). Probá de nuevo en unos minutos.`,
+    };
+  }
+  if (data?.id) return { accion: 'usar', id: data.id };
+  return { accion: 'detener', motivo: 'Falta la configuración de modalidad en el servidor.' };
+}
+
+export default function RsvpForm({ settings, diseno }: { settings: EventVM; diseno: DisenoMap }) {
   const [nombre, setNombre] = useState('');
   const [email, setEmail] = useState('');
   const [telefono, setTelefono] = useState('');
@@ -24,7 +54,8 @@ export default function RsvpForm({ settings }: { settings: EventVM }) {
   const [adultos, setAdultos] = useState(1);
   const [menores, setMenores] = useState(0);
   const [acompanantes, setAcompanantes] = useState<Acompanante[]>([]);
-  const [restricciones, setRestricciones] = useState('');
+  /* Restricciones alimentarias: eliminadas del formulario público.
+     La columna se conserva en DB para valores históricos (visibles en el panel). */
   const [observaciones, setObservaciones] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
@@ -97,6 +128,147 @@ export default function RsvpForm({ settings }: { settings: EventVM }) {
     return null;
   };
 
+  type RpcResp = {
+    ok: boolean;
+    motivo?: string;
+    guest_id?: string;
+    importe?: number;
+    que_abonan?: number;
+    total?: number;
+  };
+
+  const MENSAJE_GENERICO = 'No pudimos guardar tu confirmación. Probá de nuevo en unos minutos.';
+
+  const MOTIVOS: Record<string, string> = {
+    nombre: 'Contanos tu nombre y apellido.',
+    email: 'Revisá el correo electrónico: no parece válido.',
+    cantidades: 'Revisá las cantidades de adultos y menores.',
+    detalle: 'Revisá el detalle de acompañantes (nombres y edades).',
+    edad: 'Revisá las edades (en años, al día de la fiesta).',
+    duplicado:
+      'Ese correo ya tiene una confirmación registrada. Si necesitás modificarla, escribinos por WhatsApp.',
+  };
+
+  /**
+   * Ausencia INEQUÍVOCA de la RPC (backend pre-0003): exige el código
+   * PostgREST de función inexistente Y que el mensaje nombre a la función.
+   * Un 404 genérico, un error de red/conexión, un 403 de permisos o un 500
+   * de ejecución NO activan el fallback: esos casos muestran error en vez
+   * de desviarse a otra vía (evita enmascarar outages y dobles registros).
+   */
+  const esFuncionAusente = (code?: string, message?: string) =>
+    code === 'PGRST202' && /registrar_rsvp/i.test(message ?? '');
+
+  /** Payload exacto de registrar_rsvp: solo datos declarados, nada de estados. */
+  const construirPayload = () => ({
+    nombre_apellido: nombre.trim(),
+    email: email.trim().toLowerCase(),
+    telefono: telefono.trim() || null,
+    asiste: asiste === 'si',
+    familia: familia.trim() || null,
+    adultos,
+    menores,
+    edad_titular: edadTitular.trim() === '' ? null : edadTitular.trim(),
+    acompanantes: acompanantes.map((a) => ({ nombre: a.nombre.trim(), edad: a.edad.trim() })),
+    observaciones: observaciones.trim() || null,
+  });
+
+  const avisarCorreo = async (gid: string) => {
+    try {
+      await supabase.functions.invoke('enviar-correo', {
+        body: { tipo: 'agradecimiento', guest_id: gid },
+      });
+    } catch {
+      /* integración de correo pendiente de activar: se ignora */
+    }
+  };
+
+  // Vía de compatibilidad: INSERT directo en guests + attendees (requiere
+  // migración 0002). Se usa SOLO si la RPC aún no existe en el backend.
+  // Falla cerrado (42501) si el backend tampoco tiene 0002.
+  const enviarDirecto = async () => {
+    const asistencia = asiste === 'si' ? 'confirmado' : 'no_asistira';
+    const estadoPago =
+      asiste === 'no' || calculo.queAbonan === 0 ? 'no_corresponde' : 'pendiente_pago';
+
+    // ID generado en el cliente: el rol anónimo no tiene SELECT y RLS
+    // filtra el RETURNING, por lo que no puede leer el id de vuelta.
+    // Conocerlo de antemano permite insertar los acompañantes después
+    // sin habilitar ninguna lectura pública.
+    const guestId = crypto.randomUUID();
+
+    // Compatibilidad de modalidad (Bloqueante-1): resuelve el UUID público;
+    // ante esquema antiguo confirmado se omite; ante duda se detiene.
+    let destino: DestinoModalidad;
+    try {
+      const { data, error } = await supabase
+        .from('modalidades')
+        .select('id')
+        .eq('codigo', 'familiares')
+        .maybeSingle();
+      destino = decidirModalidad(
+        error ? { code: error.code ?? undefined, message: error.message } : null,
+        (data as { id?: string } | null) ?? null,
+      );
+    } catch {
+      destino = { accion: 'detener', motivo: 'No se pudo verificar la modalidad. Probá de nuevo en unos minutos.' };
+    }
+    if (destino.accion === 'detener') throw new Error(destino.motivo);
+    if (destino.accion === 'omitir') {
+      console.warn('[RSVP] Esquema sin modalidades: registro en modo compatibilidad (transitorio).');
+    }
+
+    const { error: gErr } = await supabase.from('guests').insert({
+      id: guestId,
+      ...(destino.accion === 'usar' ? { modalidad_id: destino.id } : {}),
+      nombre_apellido: nombre.trim(),
+      email: email.trim().toLowerCase(),
+      telefono: telefono.trim() || null,
+      asistencia,
+      apellido_familiar: familia.trim() || null,
+      cantidad_adultos: asiste === 'si' ? adultos : 0,
+      cantidad_menores: asiste === 'si' ? menores : 0,
+      observaciones: observaciones.trim() || null,
+      importe_estimado: calculo.importe,
+      estado_pago: estadoPago,
+    });
+
+    if (gErr) {
+      if ((gErr as { code?: string }).code === '23505') {
+        throw new Error(MOTIVOS.duplicado);
+      }
+      throw new Error(MENSAJE_GENERICO);
+    }
+
+    if (asiste === 'si') {
+      const edadT = edadTitular.trim() === '' ? null : Number.parseInt(edadTitular, 10);
+      const filas = [
+        {
+          guest_id: guestId,
+          nombre: nombre.trim(),
+          edad_al_evento: edadT,
+          es_titular: true,
+          debe_abonar: debeAbonar(edadT, settings.edad_minima_paga),
+        },
+        ...acompanantes.map((a, i) => {
+          const e = edades(acompanantes)[i] as number;
+          return {
+            guest_id: guestId,
+            nombre: a.nombre.trim(),
+            edad_al_evento: e,
+            es_titular: false,
+            debe_abonar: debeAbonar(e, settings.edad_minima_paga),
+          };
+        }),
+      ];
+      const { error: aErr } = await supabase.from('attendees').insert(filas);
+      if (aErr) throw new Error('Guardamos tu confirmación pero falló el detalle. Avisanos por WhatsApp.');
+    }
+
+    await avisarCorreo(guestId);
+    setExito({ importe: calculo.importe, queAbonan: calculo.queAbonan, total: asiste === 'si' ? calculo.total : 0 });
+  };
+
   const enviar = async (ev: FormEvent) => {
     ev.preventDefault();
     setError(null);
@@ -113,73 +285,40 @@ export default function RsvpForm({ settings }: { settings: EventVM }) {
     }
     setEnviando(true);
     try {
-      const asistencia = asiste === 'si' ? 'confirmado' : 'no_asistira';
-      const estadoPago =
-        asiste === 'no' || calculo.queAbonan === 0 ? 'no_corresponde' : 'pendiente_pago';
+      // Vía preferida: RPC atómica registrar_rsvp (migración 0003 aplicada).
+      // Si la función aún no existe en el backend, se usa el INSERT directo
+      // (enviarDirecto, requiere 0002). En ningún orden de despliegue el
+      // formulario queda sin una vía válida de registro.
+      const { data, error } = await supabase.rpc('registrar_rsvp', {
+        payload: construirPayload(),
+      });
+      const resp = data as RpcResp | null;
 
-      const { data: guest, error: gErr } = await supabase
-        .from('guests')
-        .insert({
-          nombre_apellido: nombre.trim(),
-          email: email.trim().toLowerCase(),
-          telefono: telefono.trim() || null,
-          asistencia,
-          apellido_familiar: familia.trim() || null,
-          cantidad_adultos: asiste === 'si' ? adultos : 0,
-          cantidad_menores: asiste === 'si' ? menores : 0,
-          restricciones: restricciones.trim() || null,
-          observaciones: observaciones.trim() || null,
-          importe_estimado: calculo.importe,
-          estado_pago: estadoPago,
-        })
-        .select('id')
-        .single();
-
-      if (gErr) {
-        if ((gErr as { code?: string }).code === '23505') {
-          throw new Error(
-            'Ese correo ya tiene una confirmación registrada. Si necesitás modificarla, escribinos por WhatsApp.',
-          );
+      if (!error && resp?.ok) {
+        // Éxito solo con forma válida: sin guest_id/importes numéricos no se
+        // informa éxito aunque ok sea true (resultado ambiguo → error).
+        if (
+          typeof resp.guest_id !== 'string' ||
+          typeof resp.importe !== 'number' ||
+          typeof resp.que_abonan !== 'number' ||
+          typeof resp.total !== 'number'
+        ) {
+          throw new Error(MENSAJE_GENERICO);
         }
-        throw new Error('No pudimos guardar tu confirmación. Probá de nuevo en unos minutos.');
+        await avisarCorreo(resp.guest_id);
+        setExito({ importe: resp.importe, queAbonan: resp.que_abonan, total: resp.total });
+        return;
       }
-
-      if (asiste === 'si') {
-        const edadT = edadTitular.trim() === '' ? null : Number.parseInt(edadTitular, 10);
-        const filas = [
-          {
-            guest_id: (guest as { id: string }).id,
-            nombre: nombre.trim(),
-            edad_al_evento: edadT,
-            es_titular: true,
-            debe_abonar: debeAbonar(edadT, settings.edad_minima_paga),
-          },
-          ...acompanantes.map((a, i) => {
-            const e = edades(acompanantes)[i] as number;
-            return {
-              guest_id: (guest as { id: string }).id,
-              nombre: a.nombre.trim(),
-              edad_al_evento: e,
-              es_titular: false,
-              debe_abonar: debeAbonar(e, settings.edad_minima_paga),
-            };
-          }),
-        ];
-        const { error: aErr } = await supabase.from('attendees').insert(filas);
-        if (aErr) throw new Error('Guardamos tu confirmación pero falló el detalle. Avisanos por WhatsApp.');
+      if (!error) {
+        // La RPC respondió y rechazó los datos: NO se reintenta por otra vía.
+        throw new Error(MOTIVOS[resp?.motivo ?? ''] ?? MENSAJE_GENERICO);
       }
-
-      // Correo de agradecimiento: lo intenta la Edge Function cuando esté activa.
-      // Se invoca best-effort y nunca bloquea la confirmación.
-      try {
-        await supabase.functions.invoke('enviar-correo', {
-          body: { tipo: 'agradecimiento', guest_id: (guest as { id: string }).id },
-        });
-      } catch {
-        /* integración de correo pendiente de activar: se ignora */
+      if (!esFuncionAusente(error.code, error.message)) {
+        // Conexión, permisos, ejecución u otro 4xx/5xx: podría haberse
+        // guardado o haber un outage; no se reintenta por otra vía.
+        throw new Error(MENSAJE_GENERICO);
       }
-
-      setExito({ importe: calculo.importe, queAbonan: calculo.queAbonan, total: asiste === 'si' ? calculo.total : 0 });
+      await enviarDirecto();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Ocurrió un error inesperado.');
     } finally {
@@ -193,8 +332,8 @@ export default function RsvpForm({ settings }: { settings: EventVM }) {
       `Hola, soy ${nombre}. Confirmé mi asistencia a los XV de ${settings.quinceanera} (${exito.total} persona(s)). ¡Gracias!`,
     );
     return (
-      <Seccion id="confirmar" kicker="Confirmación" titulo="¡Gracias por confirmar!">
-        <div className="marco-dorado rounded-2xl bg-[#0e241b]/70 p-8">
+      <Seccion id="confirmar" kicker="Confirmación" titulo="¡Gracias por confirmar!" fondo="jardin" diseno={diseno}>
+        <div className="panel-lectura rounded-2xl p-8">
           <CheckCircle2 size={40} className="mx-auto text-[#d6bd7a]" aria-hidden="true" />
           <p className="font-serifada text-2xl text-[#ecdcb0] mt-4">
             {asiste === 'si' ? '¡Te esperamos para una noche mágica!' : 'Gracias por avisarnos.'}
@@ -226,12 +365,12 @@ export default function RsvpForm({ settings }: { settings: EventVM }) {
   }
 
   return (
-    <Seccion id="confirmar" kicker="RSVP" titulo="Confirmar asistencia">
-      <p className="text-sm text-[#a8b39a] -mt-2 mb-6">
+    <Seccion id="confirmar" kicker="RSVP" titulo="Confirmar asistencia" fondo="jardin" diseno={diseno}>
+      <p className="texto-sobre-foto -mt-2 mb-6 text-sm text-[#ecdcb0]">
         Fecha límite: {formatearFechaLarga(settings.fecha_limite_confirmacion)}
         {vencida && ' · El plazo venció, pero igual podés escribirnos.'}
       </p>
-      <form onSubmit={enviar} className="marco-dorado rounded-2xl bg-[#0e241b]/70 p-5 sm:p-8 text-left space-y-5" noValidate>
+      <form onSubmit={enviar} className="panel-lectura rounded-2xl p-5 text-left space-y-5 sm:p-8" noValidate>
         <div className="grid sm:grid-cols-2 gap-4">
           <label className="block">
             <span className="text-xs uppercase tracking-[0.2em] text-[#a8b39a]">Nombre y apellido *</span>
@@ -403,16 +542,7 @@ export default function RsvpForm({ settings }: { settings: EventVM }) {
             </div>
 
             <div className="grid sm:grid-cols-2 gap-4">
-              <label className="block">
-                <span className="text-xs uppercase tracking-[0.2em] text-[#a8b39a]">Restricciones alimentarias (opcional)</span>
-                <input
-                  value={restricciones}
-                  onChange={(e) => setRestricciones(e.target.value)}
-                  className="mt-1 w-full rounded-lg bg-[#fffdf7] text-[#183b2d] px-3 py-2.5 outline-none focus:ring-2 ring-[#d6bd7a]"
-                  placeholder="Ej.: sin gluten, vegetariano…"
-                />
-              </label>
-              <label className="block">
+              <label className="block sm:col-span-2">
                 <span className="text-xs uppercase tracking-[0.2em] text-[#a8b39a]">Observaciones (opcional)</span>
                 <input
                   value={observaciones}

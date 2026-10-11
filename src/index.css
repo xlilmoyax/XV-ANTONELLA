@@ -3,6 +3,7 @@
 @theme {
   --color-bosque: #183b2d;
   --color-bosque-profundo: #0e241b;
+  --color-esmeralda: #1e5c42;
   --color-salvia: #a8b39a;
   --color-musgo: #68785b;
   --color-champagne: #d6bd7a;
@@ -27,6 +28,11 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+::selection {
+  background: rgba(214, 189, 122, 0.35);
+  color: #fffdf7;
+}
+
 .font-caligrafica {
   font-family: var(--font-caligrafica);
 }
@@ -34,12 +40,12 @@ body {
   font-family: var(--font-serifada);
 }
 
-/* ---- Bosque encantado: fondo por capas, liviano y sin imágenes pesadas ---- */
+/* ---- Fondo base (plano): bosque profundo por capas, sin imágenes ---- */
 .bosque-fondo {
   background:
-    radial-gradient(1200px 500px at 50% -80px, rgba(214, 189, 122, 0.16), transparent 60%),
-    radial-gradient(900px 600px at 85% 30%, rgba(104, 120, 91, 0.35), transparent 65%),
-    radial-gradient(900px 700px at 10% 25%, rgba(104, 120, 91, 0.3), transparent 65%),
+    radial-gradient(1200px 500px at 50% -80px, rgba(214, 189, 122, 0.14), transparent 60%),
+    radial-gradient(900px 600px at 85% 30%, rgba(104, 120, 91, 0.32), transparent 65%),
+    radial-gradient(900px 700px at 10% 25%, rgba(30, 92, 66, 0.35), transparent 65%),
     linear-gradient(180deg, #0e241b 0%, #143327 45%, #183b2d 100%);
 }
 
@@ -52,7 +58,7 @@ body {
   filter: blur(2px);
 }
 
-/* Rayos de luz suaves */
+/* Rayos de luz suaves (refuerzo sobre foto o fondo plano) */
 .rayos {
   background: conic-gradient(
     from 180deg at 50% -10%,
@@ -68,7 +74,16 @@ body {
   );
 }
 
-/* Partículas luminosas flotando (pocas, sutiles) */
+/* Viñeta cinematográfica para fondos fotográficos */
+.vineta {
+  background: radial-gradient(
+    120% 90% at 50% 45%,
+    transparent 55%,
+    rgba(8, 18, 13, 0.55) 100%
+  );
+}
+
+/* Partículas CSS mínimas (se prefiere el canvas de luciérnagas) */
 @keyframes flotar {
   0%,
   100% {
@@ -92,7 +107,14 @@ body {
   color: transparent;
 }
 
-/* Marco elegante */
+/* Sombra legible sobre fotografía */
+.texto-sobre-foto {
+  text-shadow:
+    0 1px 12px rgba(8, 18, 13, 0.9),
+    0 1px 3px rgba(8, 18, 13, 0.9);
+}
+
+/* Marco elegante simple */
 .marco-dorado {
   border: 1px solid rgba(214, 189, 122, 0.55);
   box-shadow:
@@ -100,21 +122,58 @@ body {
     0 0 40px rgba(214, 189, 122, 0.12);
 }
 
+/* Panel de lectura garantizada sobre fotografías */
+.panel-lectura {
+  background: rgba(10, 22, 16, 0.62);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(214, 189, 122, 0.4);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+}
+
+/* Marco botánico dorado (D): doble línea fina + esquinas ornamentales */
+.marco-botanico {
+  position: relative;
+  border: 1px solid rgba(214, 189, 122, 0.65);
+  outline: 1px solid rgba(214, 189, 122, 0.25);
+  outline-offset: 5px;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5);
+}
+
+/* Botones: contraste, estados y área táctil */
 .boton-dorado {
   background: linear-gradient(180deg, #ecdcb0, #d6bd7a 55%, #b89b52);
   color: #183b2d;
   letter-spacing: 0.14em;
+  min-height: 44px;
 }
 .boton-dorado:hover {
-  filter: brightness(1.06);
+  filter: brightness(1.07);
+}
+.boton-dorado:active {
+  filter: brightness(0.96);
 }
 .boton-fantasma {
   border: 1px solid rgba(214, 189, 122, 0.6);
   color: var(--color-marfil);
   letter-spacing: 0.14em;
+  min-height: 44px;
 }
 .boton-fantasma:hover {
   background: rgba(214, 189, 122, 0.12);
+}
+.boton-fantasma:active {
+  background: rgba(214, 189, 122, 0.2);
+}
+
+/* Foco visible (accesibilidad, teclado y táctil) */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid #ecdcb0;
+  outline-offset: 3px;
 }
 
 /* Respeta usuarios con movimiento reducido */
@@ -124,5 +183,25 @@ body {
   }
   html {
     scroll-behavior: auto;
+  }
+}
+
+/* Informes del asistente: impresión limpia → PDF (solo con .imprimiendo-informe) */
+@page {
+  margin: 14mm;
+}
+@media print {
+  body.imprimiendo-informe .no-imprimir {
+    display: none !important;
+  }
+  body.imprimiendo-informe .zona-informe {
+    border: none !important;
+    margin: 0 !important;
+  }
+  body.imprimiendo-informe .zona-informe table {
+    page-break-inside: auto;
+  }
+  body.imprimiendo-informe .zona-informe tr {
+    page-break-inside: avoid;
   }
 }

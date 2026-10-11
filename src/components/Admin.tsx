@@ -1,66 +1,97 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import {
   BarChart3,
-  Download,
+  BookOpenText,
   History,
   Images,
   LogOut,
   Mail,
+  Menu,
+  Palette,
   PenLine,
-  Settings2,
+  RefreshCw,
   Users,
-  UsersRound,
   Wallet,
+  X,
 } from 'lucide-react';
 import { supabase } from '../lib/supabaseClient';
-import { formatoARS } from '../xv/pricing';
-import type { Guest } from '../xv/types';
+import type { Attendee, Guest } from '../xv/types';
+import { calcularMetricas, type AjustesEvento, type AuditRow, type EmailLogRow, type GrupoRow, type MiembroRow, type PagoRow } from '../xv/metricas';
+import { enlacePara, vistaModalidad } from '../xv/modalidad';
+import {
+  Asistente,
+  Contenidos,
+  Correos,
+  Diseno,
+  GaleriaAdmin,
+  Historial,
+  Invitados,
+  Pagos,
+  Pendientes,
+  Resumen,
+  Verificados,
+  type Ctx,
+  type SeccionId,
+} from './admin/Secciones';
+import { CajaError } from './admin/atomos';
 
-type Tab =
-  | 'resumen'
-  | 'invitados'
-  | 'pagos'
-  | 'familias'
-  | 'contenidos'
-  | 'galeria'
-  | 'correos'
-  | 'historial';
+type R = Record<string, unknown>;
 
-const TABS: Array<{ id: Tab; etiqueta: string; icono: ReactNode }> = [
-  { id: 'resumen', etiqueta: 'Resumen', icono: <BarChart3 size={15} /> },
-  { id: 'invitados', etiqueta: 'Invitados', icono: <Users size={15} /> },
-  { id: 'pagos', etiqueta: 'Pagos', icono: <Wallet size={15} /> },
-  { id: 'familias', etiqueta: 'Familias', icono: <UsersRound size={15} /> },
-  { id: 'contenidos', etiqueta: 'Contenidos', icono: <PenLine size={15} /> },
-  { id: 'galeria', etiqueta: 'Galería', icono: <Images size={15} /> },
-  { id: 'correos', etiqueta: 'Correos', icono: <Mail size={15} /> },
-  { id: 'historial', etiqueta: 'Historial', icono: <History size={15} /> },
+const NAV_PRINCIPAL: Array<{ id: SeccionId; etiqueta: string }> = [
+  { id: 'resumen', etiqueta: 'Resumen' },
+  { id: 'invitados', etiqueta: 'Invitados y familias' },
+  { id: 'pagos', etiqueta: 'Control de pagos' },
+  { id: 'verificados', etiqueta: 'Verificados' },
+  { id: 'pendientes', etiqueta: 'Pendientes' },
+  { id: 'asistente', etiqueta: 'Asistente' },
+  { id: 'historial', etiqueta: 'Historial' },
 ];
 
-async function auditar(actor: string | null, entidad: string, registro: string | null, accion: string, anteriores: unknown, nuevos: unknown) {
-  try {
-    await supabase.from('audit_logs').insert({
-      actor_email: actor,
-      entidad,
-      registro_id: registro,
-      accion,
-      anteriores,
-      nuevos,
-    });
-  } catch {
-    /* auditoría best-effort */
-  }
-}
+const NAV_INVITACION: Array<{ id: SeccionId; etiqueta: string }> = [
+  { id: 'contenidos', etiqueta: 'Contenidos' },
+  { id: 'diseno', etiqueta: 'Diseño e imágenes' },
+  { id: 'galeria', etiqueta: 'Galería' },
+  { id: 'correos', etiqueta: 'Correos' },
+];
 
-function csv(rows: Array<Record<string, unknown>>, nombre: string) {
-  if (rows.length === 0) return;
-  const cols = Object.keys(rows[0]);
-  const esc = (v: unknown) => `"${String(v ?? '').replaceAll('"', '""')}"`;
-  const texto = [cols.join(','), ...rows.map((r) => cols.map((c) => esc(r[c])).join(','))].join('\n');
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob(['\ufeff' + texto], { type: 'text/csv' }));
-  a.download = nombre;
-  a.click();
+const ICONOS: Record<SeccionId, React.ReactNode> = {
+  resumen: <BarChart3 size={16} />,
+  invitados: <Users size={16} />,
+  pagos: <Wallet size={16} />,
+  verificados: <BookOpenText size={16} />,
+  pendientes: <History size={16} />,
+  asistente: <BookOpenText size={16} />,
+  historial: <History size={16} />,
+  contenidos: <PenLine size={16} />,
+  diseno: <Palette size={16} />,
+  galeria: <Images size={16} />,
+  correos: <Mail size={16} />,
+};
+
+const TITULOS: Record<SeccionId, { titulo: string; bajada: string }> = {
+  resumen: { titulo: 'Resumen general', bajada: 'Estado del evento a simple vista, con datos reales.' },
+  invitados: { titulo: 'Invitados y familias', bajada: 'Personas registradas, acompañantes y grupos.' },
+  pagos: { titulo: 'Control de pagos y saldos', bajada: 'Obligaciones, avisos y dinero verificado. No es facturación fiscal.' },
+  verificados: { titulo: 'Verificados y autorizados', bajada: 'Pagos verificados, exentos y estado de autorización.' },
+  pendientes: { titulo: 'Pendientes de gestión', bajada: 'Qué falta resolver, con el motivo concreto.' },
+  asistente: { titulo: 'Asistente de gestión', bajada: 'Consultas de solo lectura sobre datos reales.' },
+  historial: { titulo: 'Historial y auditoría', bajada: 'Acciones administrativas registradas.' },
+  contenidos: { titulo: 'Contenidos del sitio', bajada: 'Textos, datos del evento y versiones.' },
+  diseno: { titulo: 'Diseño e imágenes', bajada: 'Fondos y fotografía de la invitación, con vista previa y confirmación.' },
+  galeria: { titulo: 'Galería', bajada: 'Fotografías de la invitación.' },
+  correos: { titulo: 'Correos y recordatorios', bajada: 'Plantillas, envíos y próximos recordatorios calculados.' },
+};
+
+async function segura(p: unknown): Promise<{ data: unknown; error: string | null }> {
+  try {
+    const r = (await (p as Promise<{ data: unknown; error: { message: string } | null }>)) as {
+      data: unknown;
+      error: { message: string } | null;
+    };
+    return { data: r.data, error: r.error ? r.error.message : null };
+  } catch (e) {
+    return { data: null, error: e instanceof Error ? e.message : 'Error de consulta' };
+  }
 }
 
 export default function Admin({ onSalir }: { onSalir: () => void }) {
@@ -68,26 +99,32 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
   const [password, setPassword] = useState('');
   const [actor, setActor] = useState<string | null>(null);
   const [errorLogin, setErrorLogin] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>('resumen');
   const [cargando, setCargando] = useState(true);
+  const [actualizando, setActualizando] = useState(false);
+  const [drawer, setDrawer] = useState(false);
+
+  const [foco, setFoco] = useState<{ tab: SeccionId; q?: string; fAsist?: string; fPago?: string; n: number }>({
+    tab: 'resumen',
+    n: 0,
+  });
 
   const [guests, setGuests] = useState<Guest[]>([]);
-  const [payments, setPayments] = useState<Array<Record<string, unknown>>>([]);
-  const [groups, setGroups] = useState<Array<Record<string, unknown>>>([]);
-  const [members, setMembers] = useState<Array<Record<string, unknown>>>([]);
-  const [settings, setSettings] = useState<Record<string, unknown> | null>(null);
-  const [sections, setSections] = useState<Array<Record<string, unknown>>>([]);
-  const [templates, setTemplates] = useState<Array<Record<string, unknown>>>([]);
-  const [logs, setLogs] = useState<Array<Record<string, unknown>>>([]);
-  const [audits, setAudits] = useState<Array<Record<string, unknown>>>([]);
-  const [versions, setVersions] = useState<Array<Record<string, unknown>>>([]);
-  const [images, setImages] = useState<Array<Record<string, unknown>>>([]);
-
-  const [q, setQ] = useState('');
-  const [fAsist, setFAsist] = useState('');
-  const [fPago, setFPago] = useState('');
-  const [pagina, setPagina] = useState(0);
-  const POR_PAGINA = 20;
+  const [attendees, setAttendees] = useState<Attendee[]>([]);
+  const [payments, setPayments] = useState<PagoRow[]>([]);
+  const [groups, setGroups] = useState<GrupoRow[]>([]);
+  const [members, setMembers] = useState<MiembroRow[]>([]);
+  const [settings, setSettings] = useState<R | null>(null);
+  const [sections, setSections] = useState<R[]>([]);
+  const [templates, setTemplates] = useState<R[]>([]);
+  const [logs, setLogs] = useState<EmailLogRow[]>([]);
+  const [audits, setAudits] = useState<AuditRow[]>([]);
+  const [versions, setVersions] = useState<R[]>([]);
+  const [images, setImages] = useState<R[]>([]);
+  const [errores, setErrores] = useState<Record<string, string>>({});
+  const [actualizacion, setActualizacion] = useState('');
+  const [filtroMod, setFiltroMod] = useState<string>('todas');
+  const [copiado, setCopiado] = useState<string | null>(null);
+  const [modalidades, setModalidades] = useState<Array<{ id: string; codigo: string; nombre: string }>>([]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -98,15 +135,27 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Catálogo de modalidades (lectura pública; tolera tabla ausente pre-0006).
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data, error } = await supabase.from('modalidades').select('id,codigo,nombre');
+        if (!error && Array.isArray(data)) {
+          setModalidades(
+            (data as Array<{ id: string; codigo: string; nombre: string }>).filter((x) => x?.id && x?.codigo),
+          );
+        }
+      } catch {
+        /* sin modalidades: el filtro muestra "sin clasificar" */
+      }
+    })();
+  }, []);
+
   const verificarAdmin = async (em: string) => {
-    const { data } = await supabase
-      .from('admin_profiles')
-      .select('activo')
-      .eq('email', em)
-      .maybeSingle();
+    const { data } = await supabase.from('admin_profiles').select('activo').eq('email', em).maybeSingle();
     if ((data as { activo?: boolean } | null)?.activo) {
       setActor(em);
-      await recargar(em);
+      await recargar();
     } else {
       await supabase.auth.signOut();
       setErrorLogin('Ese usuario no es administrador.');
@@ -114,31 +163,38 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
     setCargando(false);
   };
 
-  const recargar = async (_actorEmail?: string) => {
-    const [g, p, gr, m, s, sec, tpl, lg, au, vs, img] = await Promise.all([
-      supabase.from('guests').select('*').order('created_at', { ascending: false }).limit(2000),
-      supabase.from('payment_records').select('*').order('created_at', { ascending: false }).limit(500),
-      supabase.from('guest_groups').select('*').order('nombre'),
-      supabase.from('group_members').select('*'),
-      supabase.from('event_settings').select('*').limit(1).maybeSingle(),
-      supabase.from('content_sections').select('*').order('orden'),
-      supabase.from('email_templates').select('*'),
-      supabase.from('email_logs').select('*').order('created_at', { ascending: false }).limit(200),
-      supabase.from('audit_logs').select('*').order('created_at', { ascending: false }).limit(200),
-      supabase.from('configuration_versions').select('id,nombre,descripcion,creado_por,created_at').order('created_at', { ascending: false }).limit(50),
-      supabase.from('gallery_images').select('*').order('orden'),
+  const recargar = async () => {
+    setActualizando(true);
+    const [g, a, p, gr, m, s, sec, tpl, lg, au, vs, img] = await Promise.all([
+      segura(supabase.from('guests').select('*').order('created_at', { ascending: false }).limit(2000)),
+      segura(supabase.from('attendees').select('*').limit(5000)),
+      segura(supabase.from('payment_records').select('*').order('created_at', { ascending: false }).limit(500)),
+      segura(supabase.from('guest_groups').select('*').order('nombre')),
+      segura(supabase.from('group_members').select('*')),
+      segura(supabase.from('event_settings').select('*').limit(1).maybeSingle()),
+      segura(supabase.from('content_sections').select('*').order('orden')),
+      segura(supabase.from('email_templates').select('*')),
+      segura(supabase.from('email_logs').select('*').order('created_at', { ascending: false }).limit(200)),
+      segura(supabase.from('audit_logs').select('*').order('created_at', { ascending: false }).limit(200)),
+      segura(supabase.from('configuration_versions').select('id,nombre,descripcion,creado_por,created_at').order('created_at', { ascending: false }).limit(50)),
+      segura(supabase.from('gallery_images').select('*').order('orden')),
     ]);
-    if (g.data) setGuests(g.data as Guest[]);
-    if (p.data) setPayments(p.data as Array<Record<string, unknown>>);
-    if (gr.data) setGroups(gr.data as Array<Record<string, unknown>>);
-    if (m.data) setMembers(m.data as Array<Record<string, unknown>>);
-    if (s.data) setSettings(s.data as Record<string, unknown>);
-    if (sec.data) setSections(sec.data as Array<Record<string, unknown>>);
-    if (tpl.data) setTemplates(tpl.data as Array<Record<string, unknown>>);
-    if (lg.data) setLogs(lg.data as Array<Record<string, unknown>>);
-    if (au.data) setAudits(au.data as Array<Record<string, unknown>>);
-    if (vs.data) setVersions(vs.data as Array<Record<string, unknown>>);
-    if (img.data) setImages(img.data as Array<Record<string, unknown>>);
+    const err: Record<string, string> = {};
+    if (g.error) err.guests = g.error; else setGuests((g.data as Guest[]) ?? []);
+    if (a.error) err.attendees = a.error; else setAttendees((a.data as Attendee[]) ?? []);
+    if (p.error) err.payments = p.error; else setPayments((p.data as PagoRow[]) ?? []);
+    if (gr.error) err.groups = gr.error; else setGroups((gr.data as GrupoRow[]) ?? []);
+    if (m.error) err.members = m.error; else setMembers((m.data as MiembroRow[]) ?? []);
+    if (s.error) err.settings = s.error; else setSettings((s.data as R) ?? null);
+    if (sec.error) err.sections = sec.error; else setSections((sec.data as R[]) ?? []);
+    if (tpl.error) err.templates = tpl.error; else setTemplates((tpl.data as R[]) ?? []);
+    if (lg.error) err.logs = lg.error; else setLogs((lg.data as EmailLogRow[]) ?? []);
+    if (au.error) err.audits = au.error; else setAudits((au.data as AuditRow[]) ?? []);
+    if (vs.error) err.versions = vs.error; else setVersions((vs.data as R[]) ?? []);
+    if (img.error) err.images = img.error; else setImages((img.data as R[]) ?? []);
+    setErrores(err);
+    setActualizacion(new Date().toLocaleString('es-AR'));
+    setActualizando(false);
   };
 
   const login = async (ev: FormEvent) => {
@@ -158,675 +214,275 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
     onSalir();
   };
 
-  const resumen = useMemo(() => {
-    const conf = guests.filter((g) => g.asistencia === 'confirmado');
-    const no = guests.filter((g) => g.asistencia === 'no_asistira');
-    const pend = guests.filter((g) => g.asistencia === 'pendiente' || g.asistencia === 'modificado');
-    const personas = conf.reduce((a, g) => a + g.cantidad_adultos + g.cantidad_menores, 0);
-    const adultos = conf.reduce((a, g) => a + g.cantidad_adultos, 0);
-    const menores = conf.reduce((a, g) => a + g.cantidad_menores, 0);
-    const porPago = (e: string) => guests.filter((g) => g.estado_pago === e).length;
-    const importePend = guests
-      .filter((g) => g.asistencia === 'confirmado' && g.estado_pago === 'pendiente_pago')
-      .reduce((a, g) => a + g.importe_estimado, 0);
-    const mailsOk = logs.filter((l) => l.estado === 'enviado').length;
-    const mailsErr = logs.filter((l) => l.estado === 'fallido').length;
-    return { conf, no, pend, personas, adultos, menores, porPago, importePend, mailsOk, mailsErr };
-  }, [guests, logs]);
-
-  const invitadosFiltrados = useMemo(() => {
-    const t = q.trim().toLowerCase();
-    return guests.filter(
-      (g) =>
-        (!t || g.nombre_apellido.toLowerCase().includes(t) || g.email.toLowerCase().includes(t) || (g.apellido_familiar ?? '').toLowerCase().includes(t)) &&
-        (!fAsist || g.asistencia === fAsist) &&
-        (!fPago || g.estado_pago === fPago),
-    );
-  }, [guests, q, fAsist, fPago]);
-
-  const marcarPago = async (id: string, estado: string) => {
-    const antes = payments.find((p) => p.id === id);
-    const patch: Record<string, unknown> =
-      estado === 'pago_verificado'
-        ? { estado, verificado_at: new Date().toISOString() }
-        : { estado };
-    const { error } = await supabase.from('payment_records').update(patch).eq('id', id);
-    if (!error) {
-      if (antes?.guest_id) {
-        await supabase
-          .from('guests')
-          .update(
-            estado === 'pago_verificado'
-              ? { estado_pago: estado, pago_verificado_at: new Date().toISOString() }
-              : { estado_pago: estado },
-          )
-          .eq('id', antes.guest_id as string);
-      }
-      await auditar(actor, 'payment_records', id, estado, antes, patch);
-      await recargar();
-    }
+  const ir = (tab: SeccionId, preset?: { q?: string; fAsist?: string; fPago?: string }) => {
+    setFoco((f) => ({ tab, q: preset?.q, fAsist: preset?.fAsist, fPago: preset?.fPago, n: f.n + 1 }));
+    setDrawer(false);
+    window.scrollTo({ top: 0 });
   };
 
+  const copiarEnlace = async (codigo: 'familiares' | 'companeros') => {
+    try {
+      await navigator.clipboard.writeText(
+        enlacePara(codigo, window.location.origin, window.location.pathname),
+      );
+      setCopiado(`Enlace copiado: ${codigo === 'companeros' ? 'Compañeros' : 'Familiares y amigos'}.`);
+    } catch {
+      setCopiado('No se pudo copiar (portapapeles no disponible).');
+    }
+    setTimeout(() => setCopiado(null), 4000);
+  };
+
+  const ajustes: AjustesEvento | null = settings
+    ? {
+        precio_tarjeta: Number(settings.precio_tarjeta ?? 0),
+        edad_minima_paga: Number(settings.edad_minima_paga ?? 10),
+        fecha_limite_pago: String(settings.fecha_limite_pago ?? ''),
+        recordatorio_cada_dias: Number(settings.recordatorio_cada_dias ?? 10),
+        recordatorios_activos: Boolean(settings.recordatorios_activos ?? true),
+      }
+    : null;
+
+  // Vista por modalidad: un solo filtro global; dashboard, listados,
+  // asistente e informes usan el mismo recorte (consistencia garantizada).
+  const modId =
+    filtroMod === 'todas' ? null : (modalidades.find((x) => x.codigo === filtroMod)?.id ?? 'inexistente');
+  const fuente = useMemo(
+    () => vistaModalidad(guests, attendees, payments, modId),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [guests, attendees, payments, modId],
+  );
+
+  const metrica = useMemo(
+    () =>
+      ajustes
+        ? calcularMetricas(fuente.guests, fuente.attendees, fuente.payments, groups, members, logs, ajustes)
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [fuente, groups, members, logs, settings],
+  );
+
   if (cargando) {
-    return <p className="px-6 py-20 text-center text-[#a8b39a]">Verificando acceso…</p>;
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#f4f1e8]">
+        <p className="text-sm text-stone-500">Verificando acceso…</p>
+      </div>
+    );
   }
 
   if (!actor) {
     return (
-      <section className="px-6 py-16">
-        <form onSubmit={login} className="marco-dorado max-w-sm mx-auto rounded-2xl bg-[#0e241b]/70 p-8">
-          <h2 className="font-serifada text-3xl text-[#ecdcb0] text-center">Acceso privado</h2>
-          <p className="mt-1 text-center text-xs tracking-[0.2em] text-[#a8b39a] uppercase">
-            Solo administradoras
-          </p>
+      <div className="flex min-h-screen items-center justify-center bg-[#0e241b] px-6 py-16">
+        <form onSubmit={login} className="w-full max-w-sm rounded-2xl border border-[#d6bd7a]/40 bg-[#fffdf7] p-8">
+          <h2 className="text-center font-serifada text-3xl text-[#183b2d]">Acceso privado</h2>
+          <p className="mt-1 text-center text-xs uppercase tracking-[0.2em] text-stone-500">Solo administradoras</p>
           <label className="mt-6 block">
-            <span className="text-xs uppercase tracking-[0.2em] text-[#a8b39a]">Email</span>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="mt-1 w-full rounded-lg bg-[#fffdf7] text-[#183b2d] px-3 py-2.5"
-              autoComplete="username"
-            />
+            <span className="text-xs uppercase tracking-[0.2em] text-stone-500">Email</span>
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="username" className="mt-1 w-full rounded-lg border border-stone-300 bg-white px-3 py-2.5 text-stone-900" />
           </label>
           <label className="mt-4 block">
-            <span className="text-xs uppercase tracking-[0.2em] text-[#a8b39a]">Contraseña</span>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="mt-1 w-full rounded-lg bg-[#fffdf7] text-[#183b2d] px-3 py-2.5"
-              autoComplete="current-password"
-            />
+            <span className="text-xs uppercase tracking-[0.2em] text-stone-500">Contraseña</span>
+            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" className="mt-1 w-full rounded-lg border border-stone-300 bg-white px-3 py-2.5 text-stone-900" />
           </label>
-          {errorLogin && (
-            <p role="alert" className="mt-3 text-sm text-red-200">{errorLogin}</p>
-          )}
-          <button type="submit" className="boton-dorado mt-6 w-full rounded-full px-6 py-3 text-xs font-medium">
-            INGRESAR
-          </button>
+          {errorLogin && <p role="alert" className="mt-3 text-sm text-red-700">{errorLogin}</p>}
+          <button type="submit" className="mt-6 w-full rounded-full bg-[#183b2d] px-6 py-3 text-xs font-medium text-white">INGRESAR</button>
         </form>
-      </section>
+      </div>
     );
   }
 
-  const paginados = invitadosFiltrados.slice(pagina * POR_PAGINA, pagina * POR_PAGINA + POR_PAGINA);
+  const sinConfig = !settings;
+  const sinInvitados = Boolean(errores.guests);
+
+  const ctx: Ctx | null =
+    metrica && ajustes
+      ? {
+          m: metrica,
+          guests: fuente.guests,
+          attendees: fuente.attendees,
+          payments: fuente.payments,
+          groups,
+          members,
+          logs,
+          audits,
+          templates,
+          sections,
+          images,
+          versions,
+          settings,
+          ajustes,
+          actor,
+          recargar,
+          ir,
+          actualizacion,
+          erroresCarga: errores,
+          modalidades,
+          vistaModalidad: filtroMod,
+        }
+      : null;
+
+  const navBtn = (id: SeccionId, etiqueta: string) => (
+    <button
+      key={id}
+      onClick={() => ir(id)}
+      aria-current={foco.tab === id ? 'page' : undefined}
+      className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${
+        foco.tab === id ? 'bg-[#d6bd7a] font-semibold text-[#183b2d]' : 'text-[#f8f4e9]/85 hover:bg-white/10'
+      }`}
+    >
+      <span aria-hidden="true">{ICONOS[id]}</span> {etiqueta}
+    </button>
+  );
 
   return (
-    <div className="px-4 sm:px-6 py-8 max-w-6xl mx-auto">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <h2 className="font-serifada text-3xl text-[#ecdcb0]">Panel · {actor}</h2>
-        <button onClick={salir} className="boton-fantasma rounded-full px-4 py-2 text-xs inline-flex items-center gap-2">
-          <LogOut size={14} /> SALIR
+    <div className="min-h-screen bg-[#f4f1e8] text-stone-900 md:flex">
+      {/* Lateral escritorio */}
+      <aside className="hidden w-60 shrink-0 flex-col bg-[#0e241b] p-4 md:flex" aria-label="Navegación del panel">
+        <p className="px-1 font-serifada text-xl text-[#ecdcb0]">XV · Admin</p>
+        <p className="px-1 text-[11px] text-[#a8b39a]">{actor}</p>
+        <nav className="mt-4 space-y-1">
+          {NAV_PRINCIPAL.map((n) => navBtn(n.id, n.etiqueta))}
+        </nav>
+        <p className="mt-5 px-3 text-[10px] uppercase tracking-[0.2em] text-[#a8b39a]">Invitación</p>
+        <nav className="mt-1 space-y-1">
+          {NAV_INVITACION.map((n) => navBtn(n.id, n.etiqueta))}
+        </nav>
+        <button onClick={salir} className="mt-auto flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-[#f8f4e9]/85 hover:bg-white/10">
+          <LogOut size={16} /> Salir
+        </button>
+      </aside>
+
+      {/* Barra móvil + drawer */}
+      <div className="sticky top-0 z-30 flex items-center justify-between gap-2 bg-[#0e241b] px-4 py-3 md:hidden">
+        <p className="font-serifada text-lg text-[#ecdcb0]">XV · Admin</p>
+        <button onClick={() => setDrawer(true)} aria-label="Abrir menú" className="rounded-lg p-2 text-[#f8f4e9] hover:bg-white/10">
+          <Menu size={20} />
         </button>
       </div>
-
-      <nav className="mt-5 flex gap-2 overflow-x-auto pb-1" aria-label="Secciones del panel">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            aria-pressed={tab === t.id}
-            className={`inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-xs whitespace-nowrap ${
-              tab === t.id ? 'boton-dorado' : 'boton-fantasma'
-            }`}
-          >
-            {t.icono} {t.etiqueta.toUpperCase()}
-          </button>
-        ))}
-      </nav>
-
-      {tab === 'resumen' && (
-        <div className="mt-6 grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {[
-            ['Registros', guests.length],
-            ['Confirmados', resumen.conf.length],
-            ['No asisten', resumen.no.length],
-            ['Pendientes', resumen.pend.length],
-            ['Personas', resumen.personas],
-            [`Adultos / Menores`, `${resumen.adultos} / ${resumen.menores}`],
-            ['Pago pendiente', resumen.porPago('pendiente_pago')],
-            ['Avisados', resumen.porPago('pago_informado')],
-            ['Verificados', resumen.porPago('pago_verificado')],
-            ['Revisión', resumen.porPago('requiere_revision')],
-            ['Importe pendiente', formatoARS(resumen.importePend)],
-            [`Correos ok / error`, `${resumen.mailsOk} / ${resumen.mailsErr}`],
-          ].map(([k, v]) => (
-            <div key={k as string} className="marco-dorado rounded-xl bg-[#0e241b]/60 p-4 text-center">
-              <p className="font-serifada text-2xl text-[#ecdcb0]">{v as string | number}</p>
-              <p className="text-[11px] uppercase tracking-[0.15em] text-[#a8b39a] mt-1">{k as string}</p>
+      {drawer && (
+        <div className="fixed inset-0 z-40 md:hidden" role="dialog" aria-label="Menú del panel">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setDrawer(false)} />
+          <div className="absolute left-0 top-0 flex h-full w-64 flex-col bg-[#0e241b] p-4">
+            <div className="flex items-center justify-between">
+              <p className="font-serifada text-lg text-[#ecdcb0]">Secciones</p>
+              <button onClick={() => setDrawer(false)} aria-label="Cerrar menú" className="rounded-lg p-2 text-[#f8f4e9] hover:bg-white/10">
+                <X size={18} />
+              </button>
             </div>
-          ))}
-        </div>
-      )}
-
-      {tab === 'invitados' && (
-        <div className="mt-6">
-          <div className="flex flex-wrap gap-2">
-            <input
-              value={q}
-              onChange={(e) => { setQ(e.target.value); setPagina(0); }}
-              placeholder="Buscar nombre, email o familia…"
-              className="flex-1 min-w-52 rounded-lg bg-[#fffdf7] text-[#183b2d] px-3 py-2"
-            />
-            <select value={fAsist} onChange={(e) => setFAsist(e.target.value)} className="rounded-lg bg-[#fffdf7] text-[#183b2d] px-3 py-2">
-              <option value="">Asistencia: todas</option>
-              <option value="pendiente">Pendiente</option>
-              <option value="confirmado">Confirmado</option>
-              <option value="no_asistira">No asistirá</option>
-              <option value="modificado">Modificado</option>
-            </select>
-            <select value={fPago} onChange={(e) => setFPago(e.target.value)} className="rounded-lg bg-[#fffdf7] text-[#183b2d] px-3 py-2">
-              <option value="">Pago: todos</option>
-              <option value="no_corresponde">No corresponde</option>
-              <option value="pendiente_pago">Pendiente</option>
-              <option value="pago_informado">Informado</option>
-              <option value="pago_verificado">Verificado</option>
-              <option value="requiere_revision">Revisión</option>
-            </select>
-            <button
-              onClick={() => csv(invitadosFiltrados as unknown as Array<Record<string, unknown>>, 'invitados.csv')}
-              className="boton-fantasma rounded-full px-4 py-2 text-xs inline-flex items-center gap-2"
-            >
-              <Download size={14} /> CSV
-            </button>
-          </div>
-          <div className="mt-4 overflow-x-auto rounded-xl border border-[#d6bd7a]/25">
-            <table className="w-full text-sm min-w-[760px]">
-              <thead>
-                <tr className="bg-[#183b2d] text-left text-[#a8b39a] text-xs uppercase tracking-wider">
-                  <th className="p-3">Nombre</th><th className="p-3">Email</th><th className="p-3">Familia</th>
-                  <th className="p-3">Asist.</th><th className="p-3">Pers.</th>
-                  <th className="p-3">Importe</th><th className="p-3">Pago</th>
-                </tr>
-              </thead>
-              <tbody>
-                {paginados.map((g) => (
-                  <tr key={g.id} className="border-t border-[#d6bd7a]/15 text-[#f8f4e9]">
-                    <td className="p-3">{g.nombre_apellido}</td>
-                    <td className="p-3 text-[#a8b39a]">{g.email}</td>
-                    <td className="p-3">{g.apellido_familiar ?? '—'}</td>
-                    <td className="p-3">
-                      <select
-                        value={g.asistencia}
-                        onChange={async (e) => {
-                          const antes = { ...g };
-                          await supabase.from('guests').update({ asistencia: e.target.value }).eq('id', g.id);
-                          await auditar(actor, 'guests', g.id, 'cambio-asistencia', antes, { asistencia: e.target.value });
-                          await recargar();
-                        }}
-                        className="rounded bg-[#183b2d] border border-[#d6bd7a]/40 px-1 py-0.5 text-xs"
-                      >
-                        <option value="pendiente">Pendiente</option>
-                        <option value="confirmado">Confirmado</option>
-                        <option value="no_asistira">No asistirá</option>
-                        <option value="modificado">Modificado</option>
-                      </select>
-                    </td>
-                    <td className="p-3 tabular-nums">{g.cantidad_adultos + g.cantidad_menores}</td>
-                    <td className="p-3 tabular-nums">{formatoARS(g.importe_estimado)}</td>
-                    <td className="p-3">
-                      <select
-                        value={g.estado_pago}
-                        onChange={async (e) => {
-                          const antes = { ...g };
-                          await supabase.from('guests').update({ estado_pago: e.target.value }).eq('id', g.id);
-                          await auditar(actor, 'guests', g.id, 'cambio-pago', antes, { estado_pago: e.target.value });
-                          await recargar();
-                        }}
-                        className="rounded bg-[#183b2d] border border-[#d6bd7a]/40 px-1 py-0.5 text-xs"
-                      >
-                        <option value="no_corresponde">No corresponde</option>
-                        <option value="pendiente_pago">Pendiente</option>
-                        <option value="pago_informado">Informado</option>
-                        <option value="pago_verificado">Verificado</option>
-                        <option value="requiere_revision">Revisión</option>
-                      </select>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="mt-3 flex items-center gap-3 text-sm text-[#a8b39a]">
-            <button disabled={pagina === 0} onClick={() => setPagina((p) => p - 1)} className="boton-fantasma rounded-full px-4 py-1.5 text-xs disabled:opacity-40">← Anterior</button>
-            <span>Página {pagina + 1} de {Math.max(1, Math.ceil(invitadosFiltrados.length / POR_PAGINA))} · {invitadosFiltrados.length} registros</span>
-            <button
-              disabled={(pagina + 1) * POR_PAGINA >= invitadosFiltrados.length}
-              onClick={() => setPagina((p) => p + 1)}
-              className="boton-fantasma rounded-full px-4 py-1.5 text-xs disabled:opacity-40"
-            >
-              Siguiente →
+            <nav className="mt-3 space-y-1">
+              {NAV_PRINCIPAL.map((n) => navBtn(n.id, n.etiqueta))}
+            </nav>
+            <p className="mt-4 px-3 text-[10px] uppercase tracking-[0.2em] text-[#a8b39a]">Invitación</p>
+            <nav className="mt-1 space-y-1">
+              {NAV_INVITACION.map((n) => navBtn(n.id, n.etiqueta))}
+            </nav>
+            <button onClick={salir} className="mt-auto flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-[#f8f4e9]/85 hover:bg-white/10">
+              <LogOut size={16} /> Salir ({actor})
             </button>
           </div>
         </div>
       )}
 
-      {tab === 'pagos' && (
-        <div className="mt-6 space-y-3">
-          <p className="text-sm text-[#a8b39a]">
-            Los avisos «Ya Aboné» llegan aquí como <em>pago_informado</em>. Verificar manualmente cada uno: nunca se da por verificado solo por el aviso.
-          </p>
-          {payments.length === 0 && <p className="text-[#f8f4e9]/70">Sin avisos de pago todavía.</p>}
-          {payments.map((p) => (
-            <div key={p.id as string} className="marco-dorado rounded-xl bg-[#0e241b]/60 p-4 flex flex-wrap items-center gap-3 justify-between">
-              <div className="text-sm">
-                <p className="text-[#f8f4e9]">Invitado: <span className="text-[#a8b39a]">{p.guest_id as string}</span></p>
-                <p className="text-[#ecdcb0] font-serifada text-xl">{formatoARS(Number(p.monto ?? 0))} · {p.estado as string}</p>
-                <p className="text-xs text-[#a8b39a]">
-                  Enlace individual: {`${location.origin}${location.pathname}#ya-abone/${p.token_accion as string}`}
+      {/* Contenido */}
+      <main className="min-w-0 flex-1 px-4 py-6 sm:px-6">
+        <div className="mx-auto max-w-6xl">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h2 className="font-serifada text-3xl text-[#183b2d]">{TITULOS[foco.tab].titulo}</h2>
+              <p className="text-sm text-stone-500">{TITULOS[foco.tab].bajada}</p>
+              {filtroMod !== 'todas' && (
+                <p className="mt-1 inline-block rounded-full bg-[#d6bd7a]/40 px-2 py-0.5 text-[11px] font-medium text-[#183b2d]">
+                  Vista: {modalidades.find((x) => x.codigo === filtroMod)?.nombre ?? filtroMod}
+                  {modId === 'inexistente' ? ' (tabla de modalidades aún no disponible: sin registros)' : ''}
                 </p>
-              </div>
-              <div className="flex gap-2">
-                <button onClick={() => marcarPago(p.id as string, 'pago_verificado')} className="boton-dorado rounded-full px-4 py-2 text-xs">VERIFICAR</button>
-                <button onClick={() => marcarPago(p.id as string, 'requiere_revision')} className="boton-fantasma rounded-full px-4 py-2 text-xs">REVISAR</button>
-              </div>
+              )}
             </div>
-          ))}
-          <div className="mt-4">
-            <h3 className="font-serifada text-xl text-[#ecdcb0]">Invitados con pago informado</h3>
-            {guests.filter((g) => g.estado_pago === 'pago_informado').map((g) => (
-              <p key={g.id} className="text-sm text-[#f8f4e9]/85 mt-1">
-                {g.nombre_apellido} · {g.email} · {formatoARS(g.importe_estimado)}
-              </p>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {tab === 'familias' && (
-        <Familias
-          guests={guests}
-          groups={groups}
-          members={members}
-          actor={actor}
-          recargar={recargar}
-        />
-      )}
-
-      {tab === 'contenidos' && (
-        <Contenidos
-          settings={settings}
-          sections={sections}
-          templates={templates}
-          versions={versions}
-          actor={actor}
-          recargar={recargar}
-        />
-      )}
-
-      {tab === 'galeria' && (
-        <GaleriaAdmin images={images} actor={actor} recargar={recargar} />
-      )}
-
-      {tab === 'correos' && (
-        <div className="mt-6 space-y-4">
-          <div className="rounded-xl border border-amber-300/40 bg-amber-950/30 p-4 text-sm text-amber-100">
-            Automatización <strong>preparada pero NO activada</strong>: falta definir proveedor y credenciales (ver README → Correo). No se envía nada hasta entonces.
-          </div>
-          <h3 className="font-serifada text-xl text-[#ecdcb0]">Plantillas</h3>
-          {templates.map((t) => (
-            <details key={t.id as string} className="marco-dorado rounded-xl bg-[#0e241b]/60 p-4">
-              <summary className="cursor-pointer text-[#f8f4e9]">{t.clave as string} · {t.asunto as string}</summary>
-              <pre className="mt-2 whitespace-pre-wrap text-sm text-[#f8f4e9]/85">{t.cuerpo as string}</pre>
-            </details>
-          ))}
-          <h3 className="font-serifada text-xl text-[#ecdcb0]">Últimos envíos</h3>
-          {logs.slice(0, 30).map((l) => (
-            <p key={l.id as string} className="text-sm text-[#f8f4e9]/80">
-              [{l.tipo as string}] {l.destinatario as string} → <strong>{l.estado as string}</strong>
-              {l.error ? ` · ${l.error as string}` : ''}
-            </p>
-          ))}
-        </div>
-      )}
-
-      {tab === 'historial' && (
-        <div className="mt-6 space-y-2">
-          {audits.length === 0 && <p className="text-[#f8f4e9]/70">Sin cambios registrados.</p>}
-          {audits.map((a) => (
-            <div key={a.id as string} className="rounded-lg border border-[#d6bd7a]/20 p-3 text-sm">
-              <p className="text-[#ecdcb0]">{a.accion as string} · {a.entidad as string} · {a.registro_id as string}</p>
-              <p className="text-xs text-[#a8b39a]">{a.actor_email as string} · {new Date(a.created_at as string).toLocaleString('es-AR')}</p>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ---------- Familias ---------- */
-function Familias({ guests, groups, members, actor, recargar }: {
-  guests: Guest[];
-  groups: Array<Record<string, unknown>>;
-  members: Array<Record<string, unknown>>;
-  actor: string | null;
-  recargar: () => Promise<void>;
-}) {
-  const [nombre, setNombre] = useState('');
-  const [sugerencias, setSugerencias] = useState<Array<{ apellido: string; ids: string[] }>>([]);
-
-  const generarSugerencias = () => {
-    const mapa = new Map<string, string[]>();
-    for (const g of guests) {
-      const key = (g.apellido_familiar || g.nombre_apellido.split(' ').slice(-1)[0] || '').trim().toLowerCase();
-      if (key.length < 2) continue;
-      if (!mapa.has(key)) mapa.set(key, []);
-      mapa.get(key)!.push(g.id);
-    }
-    setSugerencias(
-      [...mapa.entries()]
-        .filter(([, ids]) => ids.length > 1)
-        .map(([apellido, ids]) => ({ apellido, ids }))
-        .slice(0, 50),
-    );
-  };
-
-  const crearGrupo = async (nombreGrupo: string, ids: string[], manual = true) => {
-    const { data, error } = await supabase.from('guest_groups').insert({ nombre: nombreGrupo, manual }).select('id').single();
-    if (error || !data) return;
-    const gid = (data as { id: string }).id;
-    await supabase.from('group_members').insert(ids.map((guest_id, i) => ({ group_id: gid, guest_id, orden: i })));
-    await auditar(actor, 'guest_groups', gid, 'crear', null, { nombre: nombreGrupo, miembros: ids.length });
-    await recargar();
-  };
-
-  return (
-    <div className="mt-6 space-y-4">
-      <div className="flex flex-wrap gap-2">
-        <input value={nombre} onChange={(e) => setNombre(e.target.value)} placeholder="Nombre del grupo…" className="rounded-lg bg-[#fffdf7] text-[#183b2d] px-3 py-2 flex-1 min-w-52" />
-        <button onClick={() => nombre.trim() && crearGrupo(nombre.trim(), [])} className="boton-dorado rounded-full px-5 py-2 text-xs">CREAR GRUPO</button>
-        <button onClick={generarSugerencias} className="boton-fantasma rounded-full px-5 py-2 text-xs">GENERAR SUGERENCIAS</button>
-      </div>
-      <p className="text-xs text-[#a8b39a]">
-        Las sugerencias agrupan por apellido declarado (no asume que todo coincidente es familia: el admin acepta o corrige). Lo manual nunca se sobrescribe.
-      </p>
-      {sugerencias.map((s) => (
-        <div key={s.apellido} className="marco-dorado rounded-xl bg-[#0e241b]/60 p-4 flex flex-wrap items-center justify-between gap-2">
-          <p className="text-sm text-[#f8f4e9]">«{s.apellido}» · {s.ids.length} invitado(s)</p>
-          <button onClick={() => crearGrupo(`Familia ${s.apellido}`, s.ids, false)} className="boton-fantasma rounded-full px-4 py-1.5 text-xs">ACEPTAR SUGERENCIA</button>
-        </div>
-      ))}
-      {groups.map((gr) => {
-        const mids = members.filter((m) => m.group_id === gr.id);
-        return (
-          <details key={gr.id as string} className="marco-dorado rounded-xl bg-[#0e241b]/60 p-4">
-            <summary className="cursor-pointer text-[#f8f4e9]">
-              {gr.nombre as string} · {mids.length} miembro(s) {gr.manual ? '' : '(auto)'}
-            </summary>
-            <div className="mt-2 space-y-1">
-              {mids.map((m) => {
-                const g = guests.find((x) => x.id === m.guest_id);
-                return (
-                  <p key={m.id as string} className="text-sm text-[#f8f4e9]/85 flex justify-between gap-2">
-                    <span>{g?.nombre_apellido ?? m.guest_id as string}</span>
-                    <button
-                      onClick={async () => {
-                        await supabase.from('group_members').delete().eq('id', m.id as string);
-                        await auditar(actor, 'group_members', m.id as string, 'quitar', m, null);
-                        await recargar();
-                      }}
-                      className="text-xs text-red-200 underline"
-                    >
-                      quitar
-                    </button>
-                  </p>
-                );
-              })}
-            </div>
-          </details>
-        );
-      })}
-    </div>
-  );
-}
-
-/* ---------- Contenidos / editor ---------- */
-function Contenidos({ settings, sections, templates, versions, actor, recargar }: {
-  settings: Record<string, unknown> | null;
-  sections: Array<Record<string, unknown>>;
-  templates: Array<Record<string, unknown>>;
-  versions: Array<Record<string, unknown>>;
-  actor: string | null;
-  recargar: () => Promise<void>;
-}) {
-  const [form, setForm] = useState<Record<string, string>>({});
-  const [msg, setMsg] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (settings) {
-      const f: Record<string, string> = {};
-      for (const [k, v] of Object.entries(settings)) f[k] = String(v ?? '');
-      setForm(f);
-    }
-  }, [settings]);
-
-  const guardarEvento = async () => {
-    if (!settings) return;
-    // snapshot recuperable antes de publicar
-    await supabase.from('configuration_versions').insert({
-      nombre: `respaldo-${new Date().toISOString().slice(0, 19)}`,
-      descripcion: 'Respaldo automático antes de publicar cambios',
-      datos: settings,
-      creado_por: actor,
-    });
-    const patch: Record<string, unknown> = { ...form };
-    delete patch.id;
-    delete patch.created_at;
-    delete patch.updated_at;
-    for (const k of ['precio_tarjeta', 'edad_minima_paga', 'recordatorio_cada_dias']) {
-      if (patch[k] !== undefined) patch[k] = Number(patch[k]);
-    }
-    if (typeof patch.recordatorios_activos === 'string') {
-      patch.recordatorios_activos = patch.recordatorios_activos === 'true';
-    }
-    const { error } = await supabase.from('event_settings').update(patch).eq('id', settings.id as string);
-    if (!error) {
-      await auditar(actor, 'event_settings', settings.id as string, 'publicar', settings, patch);
-      setMsg('Publicado. Se guardó un respaldo recuperable.');
-      await recargar();
-    } else {
-      setMsg('No se pudo guardar.');
-    }
-    setTimeout(() => setMsg(null), 4000);
-  };
-
-  const restaurar = async (id: string) => {
-    const { data } = await supabase.from('configuration_versions').select('datos').eq('id', id).single();
-    const datos = (data as { datos?: Record<string, unknown> } | null)?.datos;
-    if (!datos || !settings) return;
-    const patch = { ...datos };
-    delete patch.id;
-    delete patch.created_at;
-    delete patch.updated_at;
-    await supabase.from('event_settings').update(patch).eq('id', settings.id as string);
-    await auditar(actor, 'event_settings', settings.id as string, 'restaurar-version', settings, patch);
-    await recargar();
-  };
-
-  const CAMPOS: Array<[string, string]> = [
-    ['quinceanera', 'Quinceañera'], ['evento', 'Evento'], ['fecha', 'Fecha'],
-    ['hora_inicio', 'Hora inicio'], ['hora_fin', 'Hora fin'], ['fecha_fin', 'Fecha fin'],
-    ['zona_horaria', 'Zona horaria'], ['salon', 'Salón'], ['direccion', 'Dirección'],
-    ['vestimenta', 'Vestimenta'], ['fecha_limite_confirmacion', 'Límite confirmación'],
-    ['fecha_limite_pago', 'Límite pago'], ['precio_tarjeta', 'Precio tarjeta'],
-    ['edad_minima_paga', 'Edad mínima que paga'], ['whatsapp_comprobantes', 'WhatsApp comprobantes'],
-    ['alias_transferencia', 'Alias'], ['titular_transferencia', 'Titular'],
-    ['mensaje_final', 'Mensaje final'], ['recordatorio_cada_dias', 'Recordatorio cada (días)'],
-  ];
-
-  return (
-    <div className="mt-6 space-y-6">
-      <div>
-        <h3 className="font-serifada text-xl text-[#ecdcb0] flex items-center gap-2">
-          <Settings2 size={16} /> Evento
-        </h3>
-        <div className="mt-3 grid sm:grid-cols-2 gap-3">
-          {CAMPOS.map(([k, etiqueta]) => (
-            <label key={k} className="block">
-              <span className="text-xs uppercase tracking-[0.15em] text-[#a8b39a]">{etiqueta}</span>
-              <input
-                value={form[k] ?? ''}
-                onChange={(e) => setForm((f) => ({ ...f, [k]: e.target.value }))}
-                className="mt-1 w-full rounded-lg bg-[#fffdf7] text-[#183b2d] px-3 py-2"
-              />
-            </label>
-          ))}
-          <label className="block">
-            <span className="text-xs uppercase tracking-[0.15em] text-[#a8b39a]">Recordatorios activos</span>
-            <select
-              value={form.recordatorios_activos ?? 'true'}
-              onChange={(e) => setForm((f) => ({ ...f, recordatorios_activos: e.target.value }))}
-              className="mt-1 w-full rounded-lg bg-[#fffdf7] text-[#183b2d] px-3 py-2"
-            >
-              <option value="true">Activados</option>
-              <option value="false">Pausados</option>
-            </select>
-          </label>
-        </div>
-        <button onClick={guardarEvento} className="boton-dorado mt-4 rounded-full px-6 py-3 text-xs font-medium">
-          GUARDAR Y PUBLICAR
-        </button>
-        {msg && <p className="mt-2 text-sm text-[#ecdcb0]">{msg}</p>}
-      </div>
-
-      <div>
-        <h3 className="font-serifada text-xl text-[#ecdcb0]">Textos de la invitación</h3>
-        {sections.map((s) => (
-          <details key={s.id as string} className="marco-dorado mt-2 rounded-xl bg-[#0e241b]/60 p-4">
-            <summary className="cursor-pointer text-[#f8f4e9]">{s.clave as string}</summary>
-            <textarea
-              defaultValue={(s.cuerpo as string) ?? ''}
-              rows={3}
-              id={`sec-${s.id as string}`}
-              className="mt-2 w-full rounded-lg bg-[#fffdf7] text-[#183b2d] px-3 py-2"
-            />
-            <button
-              onClick={async () => {
-                const el = document.getElementById(`sec-${s.id as string}`) as HTMLTextAreaElement;
-                await supabase.from('content_sections').update({ cuerpo: el.value }).eq('id', s.id as string);
-                await auditar(actor, 'content_sections', s.id as string, 'editar-texto', s, { cuerpo: el.value });
-                await recargar();
-              }}
-              className="boton-fantasma mt-2 rounded-full px-4 py-1.5 text-xs"
-            >
-              GUARDAR TEXTO
-            </button>
-          </details>
-        ))}
-      </div>
-
-      <div>
-        <h3 className="font-serifada text-xl text-[#ecdcb0]">Plantillas de correo</h3>
-        {templates.map((t) => (
-          <details key={t.id as string} className="marco-dorado mt-2 rounded-xl bg-[#0e241b]/60 p-4">
-            <summary className="cursor-pointer text-[#f8f4e9]">{t.clave as string}</summary>
-            <input
-              defaultValue={t.asunto as string}
-              id={`ta-${t.id as string}`}
-              className="mt-2 w-full rounded-lg bg-[#fffdf7] text-[#183b2d] px-3 py-2"
-              aria-label="Asunto"
-            />
-            <textarea
-              defaultValue={t.cuerpo as string}
-              rows={5}
-              id={`tc-${t.id as string}`}
-              className="mt-2 w-full rounded-lg bg-[#fffdf7] text-[#183b2d] px-3 py-2"
-              aria-label="Cuerpo"
-            />
-            <button
-              onClick={async () => {
-                const a = (document.getElementById(`ta-${t.id as string}`) as HTMLInputElement).value;
-                const c = (document.getElementById(`tc-${t.id as string}`) as HTMLTextAreaElement).value;
-                await supabase.from('email_templates').update({ asunto: a, cuerpo: c }).eq('id', t.id as string);
-                await auditar(actor, 'email_templates', t.id as string, 'editar-plantilla', t, { asunto: a });
-                await recargar();
-              }}
-              className="boton-fantasma mt-2 rounded-full px-4 py-1.5 text-xs"
-            >
-              GUARDAR PLANTILLA
-            </button>
-          </details>
-        ))}
-      </div>
-
-      <div>
-        <h3 className="font-serifada text-xl text-[#ecdcb0]">Versiones recuperables</h3>
-        {versions.map((v) => (
-          <p key={v.id as string} className="mt-1 text-sm text-[#f8f4e9]/85 flex flex-wrap gap-2 items-center">
-            <span>{v.nombre as string} · {new Date(v.created_at as string).toLocaleString('es-AR')}</span>
-            <button onClick={() => restaurar(v.id as string)} className="text-xs underline text-[#ecdcb0]">
-              Recuperar esta versión
-            </button>
-          </p>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/* ---------- Galería admin ---------- */
-function GaleriaAdmin({ images, actor, recargar }: {
-  images: Array<Record<string, unknown>>;
-  actor: string | null;
-  recargar: () => Promise<void>;
-}) {
-  const [subiendo, setSubiendo] = useState(false);
-
-  const subir = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
-    setSubiendo(true);
-    try {
-      for (const f of Array.from(files)) {
-        const path = `${Date.now()}-${f.name.replaceAll(' ', '-')}`;
-        const { error } = await supabase.storage.from('galeria').upload(path, f, { upsert: false });
-        if (error) continue;
-        const { data } = supabase.storage.from('galeria').getPublicUrl(path);
-        const maxOrden = images.reduce((a, i) => Math.max(a, Number(i.orden ?? 0)), 0);
-        await supabase.from('gallery_images').insert({
-          storage_path: path,
-          url_publica: data.publicUrl,
-          orden: maxOrden + 1,
-        });
-      }
-      await auditar(actor, 'gallery_images', null, 'subir', null, { cantidad: files.length });
-      await recargar();
-    } finally {
-      setSubiendo(false);
-    }
-  };
-
-  return (
-    <div className="mt-6">
-      <label className="boton-dorado inline-block cursor-pointer rounded-full px-6 py-3 text-xs font-medium">
-        {subiendo ? 'SUBIENDO…' : 'SUBIR FOTOS'}
-        <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => subir(e.target.files)} />
-      </label>
-      <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-3">
-        {images.map((img) => (
-          <div key={img.id as string} className="marco-dorado rounded-xl overflow-hidden bg-[#0e241b]">
-            {img.url_publica ? (
-              <img src={img.url_publica as string} alt={(img.epigrafe as string) || 'Foto'} className="aspect-[3/4] w-full object-cover" loading="lazy" />
-            ) : (
-              <div className="aspect-[3/4]" />
-            )}
-            <div className="p-2 flex gap-2">
+            <div className="flex items-center gap-3">
+              <label className="flex items-center gap-1.5 text-xs text-stone-500">
+                Modalidad
+                <select
+                  value={filtroMod}
+                  onChange={(e) => setFiltroMod(e.target.value)}
+                  aria-label="Filtrar por modalidad"
+                  className="rounded-full border border-stone-300 bg-white px-2 py-1.5 text-xs font-medium text-stone-700"
+                >
+                  <option value="todas">Todas</option>
+                  <option value="familiares">Familiares y amigos</option>
+                  <option value="companeros">Compañeros</option>
+                </select>
+              </label>
+              {actualizacion && <span className="text-[11px] text-stone-400">Datos: {actualizacion}</span>}
               <button
-                onClick={async () => {
-                  await supabase.storage.from('galeria').remove([img.storage_path as string]);
-                  await supabase.from('gallery_images').delete().eq('id', img.id as string);
-                  await auditar(actor, 'gallery_images', img.id as string, 'eliminar', img, null);
-                  await recargar();
-                }}
-                className="text-xs text-red-200 underline"
+                onClick={recargar}
+                disabled={actualizando}
+                className="inline-flex items-center gap-1.5 rounded-full border border-stone-300 bg-white px-3 py-1.5 text-xs font-medium text-stone-700 disabled:opacity-50"
               >
-                Eliminar
+                <RefreshCw size={13} className={actualizando ? 'animate-spin' : ''} />
+                {actualizando ? 'Actualizando…' : 'Actualizar'}
               </button>
             </div>
           </div>
-        ))}
-      </div>
+
+          <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs" aria-label="Enlaces para invitados">
+            <span className="font-medium text-stone-700">Enlaces:</span>
+            <button
+              onClick={() => copiarEnlace('familiares')}
+              className="rounded-full border border-stone-300 px-3 py-1.5 font-medium text-stone-700 hover:bg-stone-100"
+            >
+              Copiar Familiares y amigos
+            </button>
+            <button
+              onClick={() => copiarEnlace('companeros')}
+              className="rounded-full border border-stone-300 px-3 py-1.5 font-medium text-stone-700 hover:bg-stone-100"
+            >
+              Copiar Compañeros
+            </button>
+            {copiado && <span role="status" className="text-emerald-800">{copiado}</span>}
+            <span className="text-stone-500">Los enlaces solo abren la tarjeta; no autorizan. B aún no admite registros reales.</span>
+          </div>
+
+          {Object.keys(errores).length > 0 && (
+            <div className="mt-4">
+              <CajaError
+                titulo="Algunas consultas fallaron: los datos pueden estar incompletos (no se muestran como cero confirmados)."
+                detalle={Object.entries(errores).map(([k, v]) => `${k}: ${v}`).join(' · ')}
+                onReintentar={recargar}
+              />
+            </div>
+          )}
+
+          <div className="mt-5">
+            {sinConfig || !ctx ? (
+              <CajaError
+                titulo="Sin configuración del evento"
+                detalle={errores.settings ?? 'No se pudo cargar event_settings: sin reglas no se calculan importes ni exentos.'}
+                onReintentar={recargar}
+              />
+            ) : sinInvitados ? (
+              <CajaError
+                titulo="No se pudieron cargar los invitados"
+                detalle={errores.guests ?? 'Error desconocido.'}
+                onReintentar={recargar}
+              />
+            ) : (
+              <>
+                {foco.tab === 'resumen' && <Resumen ctx={ctx} />}
+                {foco.tab === 'invitados' && (
+                  <Invitados key={foco.n} ctx={ctx} presetQ={foco.q} presetAsist={foco.fAsist} presetPago={foco.fPago} />
+                )}
+                {foco.tab === 'pagos' && <Pagos ctx={ctx} />}
+                {foco.tab === 'verificados' && <Verificados ctx={ctx} />}
+                {foco.tab === 'pendientes' && <Pendientes ctx={ctx} />}
+                {foco.tab === 'asistente' && <Asistente ctx={ctx} />}
+                {foco.tab === 'historial' && <Historial ctx={ctx} />}
+                {foco.tab === 'contenidos' && <Contenidos settings={settings} sections={sections} templates={templates} versions={versions} actor={actor} recargar={recargar} />}
+                {foco.tab === 'diseno' && <Diseno ctx={ctx} />}
+                {foco.tab === 'galeria' && <GaleriaAdmin images={images} actor={actor} recargar={recargar} />}
+                {foco.tab === 'correos' && <Correos ctx={ctx} />}
+              </>
+            )}
+          </div>
+        </div>
+      </main>
     </div>
   );
 }

@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Archivo local sensible: jamás commitear
+c.txt
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

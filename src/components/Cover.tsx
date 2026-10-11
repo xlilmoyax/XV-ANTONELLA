@@ -1,54 +1,48 @@
-import { motion } from 'framer-motion';
+import { motion, useReducedMotion } from 'framer-motion';
 import { ChevronDown } from 'lucide-react';
 import { formatearFechaCorta } from '../xv/useEvent';
 import type { EventVM } from '../xv/useEvent';
-
-const PARTICULAS = [
-  { left: '12%', top: '22%', size: 5, delay: '0s' },
-  { left: '24%', top: '64%', size: 4, delay: '1.2s' },
-  { left: '38%', top: '30%', size: 6, delay: '2s' },
-  { left: '55%', top: '58%', size: 4, delay: '0.6s' },
-  { left: '68%', top: '26%', size: 5, delay: '1.7s' },
-  { left: '79%', top: '66%', size: 4, delay: '2.6s' },
-  { left: '88%', top: '40%', size: 6, delay: '0.9s' },
-  { left: '47%', top: '76%', size: 4, delay: '3.1s' },
-];
+import { FondoFoto, Luciernagas } from './Decor';
+import { resolverFondo, type DisenoMap } from '../xv/diseno';
 
 export default function Cover({
   settings,
   frase,
   onDescubrir,
+  diseno,
 }: {
   settings: EventVM;
   frase: string;
   onDescubrir: () => void;
+  diseno: DisenoMap;
 }) {
-  return (
-    <header className="bosque-fondo relative min-h-[100svh] flex items-center justify-center overflow-hidden">
-      <div className="rayos absolute inset-0" aria-hidden="true" />
-      <div className="neblina absolute inset-x-0 bottom-0 h-48" aria-hidden="true" />
-      {PARTICULAS.map((p, i) => (
-        <span
-          key={i}
-          aria-hidden="true"
-          className="particula absolute rounded-full bg-[#ecdcb0]"
-          style={{
-            left: p.left,
-            top: p.top,
-            width: p.size,
-            height: p.size,
-            animationDelay: p.delay,
-            boxShadow: '0 0 12px 2px rgba(236,220,176,0.55)',
-          }}
-        />
-      ))}
+  const reduceMotion = useReducedMotion();
+  // Fondo editable desde el panel (Diseño e imágenes); respaldo empaquetado si falta.
+  const fondo = resolverFondo(diseno, 'diseno_fondo_portada');
 
-      <div className="relative z-10 px-6 py-16 text-center max-w-2xl mx-auto">
+  return (
+    <header className="relative flex min-h-[100svh] items-center justify-center overflow-hidden">
+      <motion.div
+        initial={reduceMotion ? false : { scale: 1.08 }}
+        animate={{ scale: 1 }}
+        transition={{ duration: 2.8, ease: 'easeOut' }}
+        className="absolute inset-0"
+        aria-hidden="true"
+      >
+        <FondoFoto src={fondo.src} width={1920} height={1280} pos={fondo.pos} eager scrim="fuerte" />
+      </motion.div>
+      <div className="rayos absolute inset-0" aria-hidden="true" />
+      <div className="absolute inset-0" aria-hidden="true">
+        <Luciernagas densidad={1.1} />
+      </div>
+      <div className="neblina absolute inset-x-0 bottom-0 h-48" aria-hidden="true" />
+
+      <div className="relative z-10 mx-auto max-w-2xl px-6 py-16 text-center">
         <motion.p
           initial={{ opacity: 0, y: 14 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.9 }}
-          className="text-sm sm:text-base tracking-[0.35em] text-[#a8b39a]"
+          className="texto-sobre-foto text-sm tracking-[0.35em] text-[#ecdcb0] sm:text-base"
         >
           {formatearFechaCorta(settings.fecha)}
         </motion.p>
@@ -57,7 +51,7 @@ export default function Cover({
           initial={{ opacity: 0, y: 14 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.9, delay: 0.25 }}
-          className="mt-4 text-lg sm:text-xl tracking-[0.4em] text-[#f8f4e9]"
+          className="texto-sobre-foto mt-4 text-lg tracking-[0.4em] text-[#f8f4e9] sm:text-xl"
         >
           {settings.evento.toUpperCase()}
         </motion.p>
@@ -66,7 +60,7 @@ export default function Cover({
           initial={{ opacity: 0, scale: 0.96 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ duration: 1.1, delay: 0.5 }}
-          className="font-caligrafica brillo-dorado text-7xl sm:text-8xl md:text-9xl mt-4 leading-none"
+          className="font-caligrafica brillo-dorado mt-4 text-7xl leading-none sm:text-8xl md:text-9xl"
         >
           {settings.quinceanera}
         </motion.h1>
@@ -78,16 +72,16 @@ export default function Cover({
           className="mx-auto mt-6 flex items-center justify-center gap-3"
           aria-hidden="true"
         >
-          <span className="h-px w-16 sm:w-24 bg-[#d6bd7a]/60" />
-          <span className="text-[#d6bd7a]">✦</span>
-          <span className="h-px w-16 sm:w-24 bg-[#d6bd7a]/60" />
+          <span className="h-px w-16 bg-[#d6bd7a]/70 sm:w-24" />
+          <span className="text-[#ecdcb0]">✦ ❧ ✦</span>
+          <span className="h-px w-16 bg-[#d6bd7a]/70 sm:w-24" />
         </motion.div>
 
         <motion.p
           initial={{ opacity: 0, y: 14 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 1, delay: 1.1 }}
-          className="font-serifada italic text-lg sm:text-2xl text-[#f8f4e9]/90 mt-6 leading-relaxed"
+          className="texto-sobre-foto font-serifada mt-6 text-lg italic leading-relaxed text-[#f8f4e9] sm:text-2xl"
         >
           {frase}
         </motion.p>

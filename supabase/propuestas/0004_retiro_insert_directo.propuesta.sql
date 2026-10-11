@@ -1,0 +1,39 @@
+-- ============================================================
+-- XV-ANTONELLA · PROPUESTA 0004 · Retirar INSERT anónimo directo
+-- Estado: PROPUESTA — NO aplicada, NO está en migrations/ (db push la ignora).
+--
+-- CUÁNDO APLICAR (todas deben cumplirse):
+--   1. Migración 0003 (registrar_rsvp) aplicada y matriz R1–R10 en verde.
+--   2. Frontend con vía RPC (rpc-first + fallback) desplegado y verificado
+--      en producción con una confirmación real de prueba.
+--   3. Confirmado que no quedan clientes antiguos en uso relevante
+--      (el fallback falla cerrado, así que un cliente viejo mostraría el
+--      mensaje genérico en vez de registrar: ventana a coordinar).
+--
+-- EFECTO:
+--   POST directo a guests/attendees como anónimo → 42501 (falla cerrado).
+--   La RPC (SECURITY DEFINER) NO se ve afectada: sigue siendo la única vía.
+--   SELECT/UPDATE/DELETE admin y todo lo demás, intactos.
+--
+-- ROLLBACK (recrea el estado 0002; no borra datos):
+--   create policy g_insert on guests for insert with check (
+--     asistencia in ('confirmado', 'no_asistira')
+--     and estado_pago in ('no_corresponde', 'pendiente_pago')
+--     and pago_informado_at is null
+--     and pago_verificado_at is null
+--     and (
+--       (asistencia = 'no_asistira'
+--         and cantidad_adultos = 0
+--         and cantidad_menores = 0
+--         and importe_estimado = 0)
+--       or (asistencia = 'confirmado'
+--         and (cantidad_adultos + cantidad_menores) between 1 and 40
+--         and ((estado_pago = 'no_corresponde' and importe_estimado = 0)
+--           or (estado_pago = 'pendiente_pago' and importe_estimado > 0)))
+--     )
+--   );
+--   create policy a_insert on attendees for insert with check (true);
+-- ============================================================
+
+drop policy if exists g_insert on guests;
+drop policy if exists a_insert on attendees;

@@ -148,4 +148,4 @@ export interface ConfigurationVersion {
   created_at: string;
 }
 
-export type Screen = 'invitacion' | 'confirmar' | 'admin' | 'ya-abone';
+export type Screen = 'invitacion' | 'companeros' | 'confirmar' | 'admin' | 'ya-abone';

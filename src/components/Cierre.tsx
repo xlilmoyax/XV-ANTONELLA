@@ -1,22 +1,29 @@
 import { MapPin, Music2, Send } from 'lucide-react';
 import { mapsUrl } from '../xv/config';
 import type { EventVM } from '../xv/useEvent';
+import { FondoFoto, Luciernagas } from './Decor';
+import { resolverFondo, type DisenoMap } from '../xv/diseno';
 
-export function Cierre({ settings }: { settings: EventVM }) {
+export function Cierre({ settings, diseno }: { settings: EventVM; diseno: DisenoMap }) {
+  const fondo = resolverFondo(diseno, 'diseno_fondo_cierre');
   return (
-    <section className="bosque-fondo relative px-6 py-16 sm:py-24 text-center overflow-hidden">
+    <section className="relative overflow-hidden px-6 py-16 text-center sm:py-24">
+      <FondoFoto src={fondo.src} width={1920} height={1280} pos={fondo.pos} scrim="suave" />
       <div className="rayos absolute inset-0" aria-hidden="true" />
+      <div className="absolute inset-0" aria-hidden="true">
+        <Luciernagas densidad={0.8} />
+      </div>
       <div className="relative z-10 max-w-2xl mx-auto">
         <p className="text-xs tracking-[0.35em] text-[#a8b39a] uppercase">Con amor</p>
         <p className="font-caligrafica brillo-dorado text-6xl sm:text-7xl mt-3">
           {settings.quinceanera}
         </p>
         {settings.mensaje_final ? (
-          <p className="font-serifada italic text-xl text-[#f8f4e9]/90 mt-6 leading-relaxed">
+          <p className="texto-sobre-foto font-serifada mt-6 text-xl italic leading-relaxed text-[#f8f4e9]">
             {settings.mensaje_final}
           </p>
         ) : (
-          <p className="mt-6 text-sm tracking-wide text-[#a8b39a]">
+          <p className="texto-sobre-foto mt-6 text-sm tracking-wide text-[#ecdcb0]">
             El mensaje final de {settings.quinceanera} llegará muy pronto…
           </p>
         )}
