@@ -72,6 +72,7 @@ export type SeccionId =
   | 'asistente'
   | 'historial'
   | 'contenidos'
+  | 'tarjetas'
   | 'galeria'
   | 'correos'
   | 'diseno';
@@ -180,6 +181,7 @@ export function Invitados({
   const [orden, setOrden] = useState<Orden>('recientes');
   const [pagina, setPagina] = useState(0);
   const [detalleId, setDetalleId] = useState<string | null>(null);
+  const [editando, setEditando] = useState<Guest | null>(null);
   const [nota, setNota] = useState<string | null>(null);
   const POR_PAGINA = 20;
 
@@ -318,7 +320,10 @@ export function Invitados({
                     </div>
                   </td>
                   <td className="p-3">
-                    <button onClick={() => setDetalleId(g.id)} className="text-xs font-medium text-[#0e5c42] underline underline-offset-2">Abrir</button>
+                    <div className="flex gap-2">
+                      <button onClick={() => setDetalleId(g.id)} className="text-xs font-medium text-[#0e5c42] underline underline-offset-2">Abrir</button>
+                      <button onClick={() => setEditando(g)} className="text-xs font-medium text-[#0e5c42] underline underline-offset-2">Editar</button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -336,6 +341,14 @@ export function Invitados({
         <DetalleInvitado ctx={ctx} guest={detalle} onCerrar={() => setDetalleId(null)} />
       )}
 
+      {editando && (
+        <EditarInvitado
+          ctx={ctx}
+          guest={editando}
+          onCerrar={() => setEditando(null)}
+        />
+      )}
+
       <div className="mt-8 border-t border-stone-200 pt-6">
         <h3 className="font-serifada text-2xl text-[#183b2d]">Familias y grupos</h3>
         <Familias
@@ -351,11 +364,178 @@ export function Invitados({
   );
 }
 
+const EMAIL_RE_INVITADO = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+function EditarInvitado({ ctx, guest: g, onCerrar }: { ctx: Ctx; guest: Guest; onCerrar: () => void }) {
+  const [nombre, setNombre] = useState(g.nombre_apellido);
+  const [email, setEmail] = useState(g.email);
+  const [telefono, setTelefono] = useState(g.telefono ?? '');
+  const [familia, setFamilia] = useState(g.apellido_familiar ?? '');
+  const [asistencia, setAsistencia] = useState<string>(g.asistencia);
+  const [adultos, setAdultos] = useState(String(g.cantidad_adultos));
+  const [menores, setMenores] = useState(String(g.cantidad_menores));
+  const [importe, setImporte] = useState(String(g.importe_estimado));
+  const [estadoPago, setEstadoPago] = useState<string>(g.estado_pago);
+  const [restricciones, setRestricciones] = useState(g.restricciones ?? '');
+  const [observaciones, setObservaciones] = useState(g.observaciones ?? '');
+  const [error, setError] = useState<string | null>(null);
+  const [guardando, setGuardando] = useState(false);
+
+  const guardar = async () => {
+    setError(null);
+    const nombreLimpio = nombre.trim();
+    const emailLimpio = email.trim().toLowerCase();
+    if (nombreLimpio.length < 3) {
+      setError('El nombre debe tener al menos 3 caracteres.');
+      return;
+    }
+    if (!EMAIL_RE_INVITADO.test(emailLimpio)) {
+      setError('El correo electrónico no parece válido.');
+      return;
+    }
+    const nAdultos = Number.parseInt(adultos, 10);
+    const nMenores = Number.parseInt(menores, 10);
+    const nImporte = Number.parseInt(importe, 10);
+    if (![nAdultos, nMenores, nImporte].every((n) => Number.isFinite(n) && n >= 0)) {
+      setError('Cantidades e importe deben ser números enteros no negativos.');
+      return;
+    }
+    // Coherencia: si cambian las cantidades, el importe debe revisarse a mano.
+    const cambioCantidades = nAdultos !== g.cantidad_adultos || nMenores !== g.cantidad_menores;
+    if (cambioCantidades && nImporte === g.importe_estimado) {
+      setError('Cambiaste las cantidades: actualizá también el importe estimado.');
+      return;
+    }
+    setGuardando(true);
+    try {
+      // Duplicado dentro de la misma base (el UNIQUE es el árbitro final).
+      const { data: dup, error: dupErr } = await supabase
+        .from('guests')
+        .select('id')
+        .eq('email', emailLimpio)
+        .neq('id', g.id)
+        .limit(1)
+        .maybeSingle();
+      if (dupErr) throw new Error(`No se pudo verificar duplicados: ${dupErr.message}`);
+      if (dup) {
+        setError('Ese correo ya está registrado en otro invitado.');
+        return;
+      }
+      const patch = {
+        nombre_apellido: nombreLimpio,
+        email: emailLimpio,
+        telefono: telefono.trim() || null,
+        apellido_familiar: familia.trim() || null,
+        asistencia,
+        cantidad_adultos: nAdultos,
+        cantidad_menores: nMenores,
+        importe_estimado: nImporte,
+        estado_pago: estadoPago,
+        restricciones: restricciones.trim() || null,
+        observaciones: observaciones.trim() || null,
+      };
+      const { error } = await supabase.from('guests').update(patch).eq('id', g.id);
+      if (error) throw new Error(`No se pudo guardar: ${error.message}`);
+      const aviso = await auditar(ctx.actor, 'guests', g.id, 'editar', g, patch);
+      if (aviso) {
+        setError(`${aviso} (los datos se guardaron igual).`);
+      } else {
+        onCerrar();
+      }
+      await ctx.recargar();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Error inesperado al guardar.');
+    } finally {
+      setGuardando(false);
+    }
+  };
+
+  const campo = 'mt-1 w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm';
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-label={`Editar a ${g.nombre_apellido}`}>
+      <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-6">
+        <h3 className="font-serifada text-2xl text-[#183b2d]">Editar invitado</h3>
+        <p className="text-xs text-stone-500">Solo campos del registro. No se tocan pagos, comprobantes, auditoría ni envíos.</p>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <label className="block sm:col-span-2">
+            <span className="text-xs uppercase tracking-[0.15em] text-stone-500">Nombre y apellido *</span>
+            <input value={nombre} onChange={(e) => setNombre(e.target.value)} className={campo} />
+          </label>
+          <label className="block">
+            <span className="text-xs uppercase tracking-[0.15em] text-stone-500">Correo *</span>
+            <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" className={campo} />
+          </label>
+          <label className="block">
+            <span className="text-xs uppercase tracking-[0.15em] text-stone-500">Teléfono</span>
+            <input value={telefono} onChange={(e) => setTelefono(e.target.value)} type="tel" className={campo} />
+          </label>
+          <label className="block">
+            <span className="text-xs uppercase tracking-[0.15em] text-stone-500">Familia o grupo</span>
+            <input value={familia} onChange={(e) => setFamilia(e.target.value)} className={campo} />
+          </label>
+          <label className="block">
+            <span className="text-xs uppercase tracking-[0.15em] text-stone-500">Confirmación</span>
+            <select value={asistencia} onChange={(e) => setAsistencia(e.target.value)} className={campo}>
+              <option value="pendiente">Pendiente</option>
+              <option value="confirmado">Confirmado</option>
+              <option value="no_asistira">No asistirá</option>
+              <option value="modificado">Modificado</option>
+            </select>
+          </label>
+          <label className="block">
+            <span className="text-xs uppercase tracking-[0.15em] text-stone-500">Adultos</span>
+            <input value={adultos} onChange={(e) => setAdultos(e.target.value.replace(/[^0-9]/g, '').slice(0, 2))} inputMode="numeric" className={campo} />
+          </label>
+          <label className="block">
+            <span className="text-xs uppercase tracking-[0.15em] text-stone-500">Menores</span>
+            <input value={menores} onChange={(e) => setMenores(e.target.value.replace(/[^0-9]/g, '').slice(0, 2))} inputMode="numeric" className={campo} />
+          </label>
+          <label className="block">
+            <span className="text-xs uppercase tracking-[0.15em] text-stone-500">Importe estimado (ARS)</span>
+            <input value={importe} onChange={(e) => setImporte(e.target.value.replace(/[^0-9]/g, '').slice(0, 9))} inputMode="numeric" className={campo} />
+          </label>
+          <label className="block">
+            <span className="text-xs uppercase tracking-[0.15em] text-stone-500">Estado de pago</span>
+            <select value={estadoPago} onChange={(e) => setEstadoPago(e.target.value)} className={campo}>
+              <option value="no_corresponde">No corresponde</option>
+              <option value="pendiente_pago">Pendiente</option>
+              <option value="pago_informado">Informado</option>
+              <option value="pago_verificado">Verificado</option>
+              <option value="requiere_revision">Revisión</option>
+            </select>
+          </label>
+          <label className="block sm:col-span-2">
+            <span className="text-xs uppercase tracking-[0.15em] text-stone-500">Restricciones (histórico)</span>
+            <input value={restricciones} onChange={(e) => setRestricciones(e.target.value)} className={campo} />
+          </label>
+          <label className="block sm:col-span-2">
+            <span className="text-xs uppercase tracking-[0.15em] text-stone-500">Observaciones</span>
+            <input value={observaciones} onChange={(e) => setObservaciones(e.target.value)} className={campo} />
+          </label>
+        </div>
+        {error && <p role="alert" className="mt-3 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p>}
+        <div className="mt-4 flex gap-2">
+          <button onClick={guardar} disabled={guardando} className="rounded-full bg-[#183b2d] px-5 py-2.5 text-xs font-medium text-white disabled:opacity-50">
+            {guardando ? 'Guardando…' : 'Guardar cambios'}
+          </button>
+          <button onClick={onCerrar} disabled={guardando} className="rounded-full border border-stone-300 px-5 py-2.5 text-xs disabled:opacity-50">
+            Cancelar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DetalleInvitado({ ctx, guest: g, onCerrar }: { ctx: Ctx; guest: Guest; onCerrar: () => void }) {
   const acomp = ctx.attendees.filter((a) => a.guest_id === g.id);
   const pagos = ctx.payments.filter((p) => p.guest_id === g.id);
+  const envios = ctx.logs.filter((l) => l.guest_id === g.id);
   const hist = ctx.audits.filter((a) => a.registro_id === g.id);
   const grupos = ctx.members.filter((m) => m.guest_id === g.id).map((m) => ctx.groups.find((gr) => gr.id === m.group_id)?.nombre ?? m.group_id);
+  const [gestionMsg, setGestionMsg] = useState<string | null>(null);
+  const [gestionando, setGestionando] = useState(false);
+  const vinculados = acomp.length + pagos.length + envios.length + grupos.length;
   return (
     <div className="mt-4 rounded-xl border border-[#d6bd7a]/50 bg-[#fffdf7] p-5" role="dialog" aria-label={`Detalle de ${g.nombre_apellido}`}>
       <Volver onVolver={onCerrar} destino="el listado de invitados (se conservan filtros y página)" />
@@ -415,6 +595,68 @@ function DetalleInvitado({ ctx, guest: g, onCerrar }: { ctx: Ctx; guest: Guest; 
           ))}
         </ul>
       )}
+      <h4 className="mt-4 text-sm font-semibold text-stone-700">Gestión del registro</h4>
+      <p className="text-xs text-stone-500">
+        Los invitados no usan cuenta de acceso: esto no afecta usuarios de Auth.
+        Relacionados: {acomp.length} acompañante(s), {pagos.length} aviso(s),
+        {' '}{envios.length} envío(s), {grupos.length} grupo(s).
+      </p>
+      {gestionMsg && <p role="status" className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">{gestionMsg}</p>}
+      <div className="mt-2 flex flex-wrap gap-2">
+        <button
+          disabled={gestionando}
+          onClick={async () => {
+            if (!window.confirm(`Dar de baja a ${g.nombre_apellido}? Pasará a "No asistirá" sin pago. NO se borra nada: acompañantes, pagos, envíos, grupos y auditoría se conservan.`)) return;
+            setGestionando(true);
+            setGestionMsg(null);
+            try {
+              const antes = { ...g };
+              const patch = { asistencia: 'no_asistira', estado_pago: 'no_corresponde' };
+              const { error } = await supabase.from('guests').update(patch).eq('id', g.id);
+              if (error) throw new Error(`No se pudo dar de baja: ${error.message}`);
+              const aviso = await auditar(ctx.actor, 'guests', g.id, 'baja', antes, patch);
+              setGestionMsg(aviso ?? 'Baja registrada. Los datos vinculados se conservaron.');
+              await ctx.recargar();
+            } catch (e) {
+              setGestionMsg(e instanceof Error ? e.message : 'Error inesperado.');
+            } finally {
+              setGestionando(false);
+            }
+          }}
+          className="rounded-full border border-amber-400 px-4 py-2 text-xs font-medium text-amber-900 disabled:opacity-50"
+        >
+          Dar de baja (conserva todo)
+        </button>
+        {vinculados === 0 ? (
+          <button
+            disabled={gestionando}
+            onClick={async () => {
+              if (!window.confirm(`Eliminar DEFINITIVAMENTE a ${g.nombre_apellido}? No tiene elementos vinculados. Esta acción no se puede deshacer.`)) return;
+              if (!window.confirm('Confirmá por segunda vez: se borrará el registro.')) return;
+              setGestionando(true);
+              setGestionMsg(null);
+              try {
+                const { error } = await supabase.from('guests').delete().eq('id', g.id);
+                if (error) throw new Error(`No se pudo eliminar: ${error.message}`);
+                await auditar(ctx.actor, 'guests', g.id, 'eliminar', g, null);
+                await ctx.recargar();
+                onCerrar();
+              } catch (e) {
+                setGestionMsg(e instanceof Error ? e.message : 'Error inesperado.');
+              } finally {
+                setGestionando(false);
+              }
+            }}
+            className="rounded-full border border-red-300 px-4 py-2 text-xs font-medium text-red-800 disabled:opacity-50"
+          >
+            Eliminar definitivamente
+          </button>
+        ) : (
+          <p className="text-xs text-stone-500 self-center">
+            Eliminación bloqueada: tiene elementos vinculados. Usá “Dar de baja”.
+          </p>
+        )}
+      </div>
     </div>
   );
 }
@@ -1814,6 +2056,89 @@ function NuevaSeccion({
   );
 }
 
+/* ---------- Bloque reutilizable de textos (A y B lo comparten sin duplicar) ---------- */
+function BloqueTextos({
+  sections,
+  actor,
+  recargar,
+  filtro,
+  nota,
+}: {
+  sections: R[];
+  actor: string | null;
+  recargar: () => Promise<void>;
+  filtro: (clave: string) => boolean;
+  nota?: string;
+}) {
+  const [msg, setMsg] = useState<string | null>(null);
+  const lista = sections.filter((s) => filtro(s.clave as string));
+  return (
+    <div>
+      <h3 className="font-serifada text-xl text-[#183b2d]">Textos de la invitación</h3>
+      {nota && <p className="text-xs text-stone-500">{nota}</p>}
+      <NuevaSeccion actor={actor} recargar={recargar} onMsg={setMsg} />
+      {lista.length === 0 && (
+        <p className="mt-2 text-xs text-stone-500">
+          Sin textos en esta tarjeta. Creá las claves necesarias con “Nueva sección de texto”.
+        </p>
+      )}
+      {lista.map((s) => (
+        <details key={s.id as string} className="mt-2 rounded-xl border border-stone-200 bg-white p-4">
+          <summary className="cursor-pointer text-stone-900">{s.clave as string}</summary>
+          {s.visible === false && (
+            <p className="text-xs text-amber-700">Oculta en la invitación pública.</p>
+          )}
+          <textarea
+            defaultValue={(s.cuerpo as string) ?? ''}
+            rows={3}
+            id={`sec-${s.id as string}`}
+            className="mt-2 w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm"
+          />
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button
+              onClick={async () => {
+                const el = document.getElementById(`sec-${s.id as string}`) as HTMLTextAreaElement;
+                const { error } = await supabase.from('content_sections').update({ cuerpo: el.value }).eq('id', s.id as string);
+                if (error) {
+                  setMsg(`No se pudo guardar: ${error.message}`);
+                  return;
+                }
+                await auditar(actor, 'content_sections', s.id as string, 'editar-texto', s, { cuerpo: el.value });
+                setMsg('Texto guardado.');
+                await recargar();
+              }}
+              className="rounded-full border border-stone-300 px-4 py-1.5 text-xs"
+            >
+              GUARDAR TEXTO
+            </button>
+            <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-stone-600">
+              <input
+                type="checkbox"
+                checked={s.visible !== false}
+                onChange={async (e) => {
+                  const { error } = await supabase
+                    .from('content_sections')
+                    .update({ visible: e.target.checked })
+                    .eq('id', s.id as string);
+                  if (error) {
+                    setMsg(`No se pudo cambiar la visibilidad: ${error.message}`);
+                    return;
+                  }
+                  await auditar(actor, 'content_sections', s.id as string, 'visibilidad', s, { visible: e.target.checked });
+                  setMsg(e.target.checked ? 'Sección visible.' : 'Sección oculta.');
+                  await recargar();
+                }}
+              />
+              Visible
+            </label>
+          </div>
+        </details>
+      ))}
+      {msg && <p className="mt-2 text-sm text-stone-700">{msg}</p>}
+    </div>
+  );
+}
+
 /* ---------- Contenidos / editor (existente) ---------- */
 export function Contenidos({ settings, sections, templates, versions, actor, recargar }: {
   settings: R | null;
@@ -1929,38 +2254,13 @@ export function Contenidos({ settings, sections, templates, versions, actor, rec
         {msg && <p className="mt-2 text-sm text-stone-700">{msg}</p>}
       </div>
 
-      <div>
-        <h3 className="font-serifada text-xl text-[#183b2d]">Textos de la invitación</h3>
-        <p className="text-xs text-stone-500">Las imágenes de diseño (<code>diseno_*</code>) se administran en “Diseño e imágenes”, no aquí.</p>
-        <NuevaSeccion actor={actor} recargar={recargar} onMsg={setMsg} />
-        {sections.filter((s) => !(s.clave as string).startsWith('diseno_')).map((s) => (
-          <details key={s.id as string} className="mt-2 rounded-xl border border-stone-200 bg-white p-4">
-            <summary className="cursor-pointer text-stone-900">{s.clave as string}</summary>
-            <textarea
-              defaultValue={(s.cuerpo as string) ?? ''}
-              rows={3}
-              id={`sec-${s.id as string}`}
-              className="mt-2 w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm"
-            />
-            <button
-              onClick={async () => {
-                const el = document.getElementById(`sec-${s.id as string}`) as HTMLTextAreaElement;
-                const { error } = await supabase.from('content_sections').update({ cuerpo: el.value }).eq('id', s.id as string);
-                if (error) {
-                  setMsg(`No se pudo guardar: ${error.message}`);
-                  return;
-                }
-                await auditar(actor, 'content_sections', s.id as string, 'editar-texto', s, { cuerpo: el.value });
-                setMsg('Texto guardado.');
-                await recargar();
-              }}
-              className="mt-2 rounded-full border border-stone-300 px-4 py-1.5 text-xs"
-            >
-              GUARDAR TEXTO
-            </button>
-          </details>
-        ))}
-      </div>
+      <BloqueTextos
+        sections={sections}
+        actor={actor}
+        recargar={recargar}
+        filtro={(c) => !c.startsWith('diseno_') && !c.startsWith('b_')}
+        nota="Las imágenes de diseño (diseno_*) se administran en “Diseño e imágenes”, y los textos de Compañeros (b_*) en su tarjeta. No aquí."
+      />
 
       <div>
         <h3 className="font-serifada text-xl text-[#183b2d]">Plantillas de correo</h3>
@@ -2442,7 +2742,70 @@ function TarjetaDiseno({ ctx, def }: { ctx: Ctx; def: FondoDef }) {
   );
 }
 
-export function Diseno({ ctx }: { ctx: Ctx }) {
+/* ---------- Tarjetas A/B: editores independientes, mismo panel ---------- */
+export function Tarjetas({ ctx }: { ctx: Ctx }) {
+  const [cual, setCual] = useState<'A' | 'B'>('A');
+  const esB = cual === 'B';
+  return (
+    <div>
+      <div className="flex flex-wrap gap-2" role="tablist" aria-label="Tarjeta a editar">
+        <button
+          role="tab"
+          aria-selected={!esB}
+          onClick={() => setCual('A')}
+          className={`rounded-full px-5 py-2 text-xs font-medium ${!esB ? 'bg-[#183b2d] text-white' : 'border border-stone-300 bg-white text-stone-700'}`}
+        >
+          Editar tarjeta — Familiares y amigos
+        </button>
+        <button
+          role="tab"
+          aria-selected={esB}
+          onClick={() => setCual('B')}
+          className={`rounded-full px-5 py-2 text-xs font-medium ${esB ? 'bg-[#183b2d] text-white' : 'border border-stone-300 bg-white text-stone-700'}`}
+        >
+          Editar tarjeta — Compañeros
+        </button>
+      </div>
+      {!esB ? (
+        <div className="mt-4 space-y-6">
+          <p className="rounded-xl border border-[#d6bd7a]/50 bg-[#fffdf7] p-3 text-xs text-stone-600">
+            Editando <strong>Familiares y amigos</strong>. Datos del evento, plantillas y versiones son
+            compartidos (un solo evento); los textos <code>b_*</code> pertenecen a Compañeros y no se
+            muestran aquí.
+          </p>
+          <Contenidos
+            settings={ctx.settings as R | null}
+            sections={ctx.sections}
+            templates={ctx.templates}
+            versions={ctx.versions}
+            actor={ctx.actor}
+            recargar={ctx.recargar}
+          />
+          <Diseno ctx={ctx} defs={FONDOS.filter((d) => !d.clave.startsWith('diseno_b_'))} />
+        </div>
+      ) : (
+        <div className="mt-4 space-y-6">
+          <p className="rounded-xl border border-[#d6bd7a]/50 bg-[#fffdf7] p-3 text-xs text-stone-600">
+            Editando <strong>Compañeros</strong>. Solo claves <code>b_*</code> y fondos propios: nada de
+            lo que guardes aquí toca la otra tarjeta. Los datos del evento y las plantillas de correo
+            son compartidos y se editan en la tarjeta A.
+          </p>
+          <BloqueTextos
+            sections={ctx.sections}
+            actor={ctx.actor}
+            recargar={ctx.recargar}
+            filtro={(c) => c.startsWith('b_')}
+            nota="Textos exclusivos de Compañeros (portada, presentación). La fotografía de Antonella es compartida."
+          />
+          <Diseno ctx={ctx} defs={FONDOS.filter((d) => d.clave.startsWith('diseno_b_'))} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function Diseno({ ctx, defs }: { ctx: Ctx; defs?: FondoDef[] }) {
+  const lista = defs ?? FONDOS;
   return (
     <div className="space-y-4">
       <div className="rounded-xl border border-[#d6bd7a]/50 bg-[#fffdf7] p-4 text-sm text-stone-700">
@@ -2456,7 +2819,7 @@ export function Diseno({ ctx }: { ctx: Ctx }) {
           del evento se administra aparte, en su sección.
         </p>
       </div>
-      {FONDOS.map((def) => (
+      {lista.map((def) => (
         <TarjetaDiseno key={def.clave} ctx={ctx} def={def} />
       ))}
     </div>

@@ -6,13 +6,16 @@ import type { EventVM } from '../xv/useEvent';
 import { FondoFoto, Luciernagas, Transicion } from './Decor';
 import { FONDOS, resolverFondo, type DisenoMap } from '../xv/diseno';
 
-export type FondoSeccion = 'plano' | 'jardin' | 'portada' | 'pagos' | 'cierre';
+export type FondoSeccion = 'plano' | 'jardin' | 'portada' | 'pagos' | 'cierre' | 'b_portada' | 'b_jardin' | 'b_pagos';
 
 const CLAVE_FONDO: Record<Exclude<FondoSeccion, 'plano'>, string> = {
   jardin: 'diseno_fondo_jardin',
   portada: 'diseno_fondo_portada',
   pagos: 'diseno_fondo_pagos',
   cierre: 'diseno_fondo_cierre',
+  b_portada: 'diseno_b_portada',
+  b_jardin: 'diseno_b_jardin',
+  b_pagos: 'diseno_b_pagos',
 };
 
 export function Seccion({

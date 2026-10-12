@@ -17,9 +17,10 @@ import { importeB, payloadB, validarB } from '../xv/companeros';
 import { formatearFechaCorta, formatearFechaLarga, type EventVM } from '../xv/useEvent';
 import type { DisenoMap } from '../xv/diseno';
 import { resolverFondo } from '../xv/diseno';
-import { FondoFoto, Luciernagas, Transicion } from './Decor';
+import { FondoFoto, Luciernagas, MarcoBotanico, Transicion } from './Decor';
 import { Seccion } from './EventInfo';
 import Countdown from './Countdown';
+import MusicaFondo from './MusicaFondo';
 
 const EMAIL_OK = '¡Gracias por confirmar tu asistencia a los XV de Antonella!';
 
@@ -92,7 +93,7 @@ function FormB({ settings, mod, diseno }: { settings: EventVM; mod: ModalidadCon
       `Hola, soy ${nombre}. Confirmé mi asistencia (compañeros) a los XV de ${settings.quinceanera}. ¡Gracias!`,
     );
     return (
-      <Seccion id="b-confirmar" kicker="Confirmación" titulo="¡Gracias por confirmar!" fondo="jardin" diseno={diseno}>
+      <Seccion id="b-confirmar" kicker="Confirmación" titulo="¡Gracias por confirmar!" fondo="b_jardin" diseno={diseno}>
         <div className="panel-lectura rounded-2xl p-8">
           <p className="font-serifada text-2xl text-[#ecdcb0]">
             {asiste === 'si' ? '¡Te esperamos!' : 'Gracias por avisarnos.'}
@@ -112,7 +113,7 @@ function FormB({ settings, mod, diseno }: { settings: EventVM; mod: ModalidadCon
   }
 
   return (
-    <Seccion id="b-confirmar" kicker="RSVP · Individual" titulo="Confirmar asistencia" fondo="jardin" diseno={diseno}>
+    <Seccion id="b-confirmar" kicker="RSVP · Individual" titulo="Confirmar asistencia" fondo="b_jardin" diseno={diseno}>
       <p className="texto-sobre-foto -mt-2 mb-6 text-sm text-[#ecdcb0]">
         Invitación personal · Límite: {formatearFechaLarga(mod.limite_confirmacion)}
       </p>
@@ -168,10 +169,25 @@ function FormB({ settings, mod, diseno }: { settings: EventVM; mod: ModalidadCon
   );
 }
 
-export default function CompanerosView({ settings, diseno }: { settings: EventVM; diseno: DisenoMap }) {
+export default function CompanerosView({
+  settings,
+  diseno,
+  videoId,
+  presentacion,
+}: {
+  settings: EventVM;
+  diseno: DisenoMap;
+  videoId: string;
+  presentacion: { titulo: string; texto: string };
+}) {
   const [mod, setMod] = useState<ModalidadConfig>({ ...MODALIDAD_B_ESTATICA });
   const reduceMotion = useReducedMotion();
-  const fondoPortada = resolverFondo(diseno, 'diseno_fondo_portada');
+  const fondoPortada = resolverFondo(diseno, 'diseno_b_portada');
+  // Misma fotografía que en Familiares (mismo archivo, sin copiar ni duplicar
+  // almacenamiento; la regla de persona única se mantiene: un solo recurso).
+  const figuraB = resolverFondo(diseno, 'diseno_figura');
+  const ALT_FIGURA_B =
+    'Antonella de espaldas, con vestido verde de quince años, mirando hacia la luz del bosque encantado';
 
   useEffect(() => {
     let vivo = true;
@@ -253,7 +269,33 @@ export default function CompanerosView({ settings, diseno }: { settings: EventVM
       </header>
 
       <main>
-        <Seccion id="b-info" kicker="Cuándo y dónde" titulo="Información del evento" fondo="jardin" diseno={diseno}>
+        <Seccion id="b-presentacion" kicker="Bienvenidos" titulo={presentacion.titulo} fondo="b_jardin" diseno={diseno}>
+          {presentacion.texto.trim() ? (
+            <Transicion>
+              <p className="texto-sobre-foto font-serifada text-lg italic leading-relaxed text-[#f8f4e9] sm:text-xl">
+                {presentacion.texto}
+              </p>
+            </Transicion>
+          ) : null}
+          <Transicion>
+            <figure className="mx-auto mt-8 max-w-sm">
+              <MarcoBotanico>
+                <img
+                  src={figuraB.src}
+                  alt={ALT_FIGURA_B}
+                  width={1260}
+                  height={1890}
+                  loading="lazy"
+                  decoding="async"
+                  className="aspect-[2/3] w-full rounded-lg object-cover"
+                  style={{ objectPosition: figuraB.pos }}
+                />
+              </MarcoBotanico>
+            </figure>
+          </Transicion>
+        </Seccion>
+
+        <Seccion id="b-info" kicker="Cuándo y dónde" titulo="Información del evento" fondo="b_jardin" diseno={diseno}>
           <Transicion>
             <ul className="space-y-3 text-left">
               <InfoRow icono={<CalendarPlus size={18} />} texto={formatearFechaLarga(mod.fecha)} />
@@ -273,7 +315,7 @@ export default function CompanerosView({ settings, diseno }: { settings: EventVM
           <Countdown settings={adaptados} />
         </Seccion>
 
-        <Seccion id="b-pagos" kicker="Confirmar y abonar" titulo="Datos para confirmar y abonar" fondo="pagos" diseno={diseno}>
+        <Seccion id="b-pagos" kicker="Confirmar y abonar" titulo="Datos para confirmar y abonar" fondo="b_pagos" diseno={diseno}>
           <div className="panel-lectura rounded-2xl p-6 text-left">
             <p className="font-serifada text-lg text-[#f8f4e9]">
               Tarjeta individual: {formatoARS(mod.precio)} por invitado.
@@ -295,6 +337,7 @@ export default function CompanerosView({ settings, diseno }: { settings: EventVM
         </Seccion>
 
         <FormB settings={settings} mod={mod} diseno={diseno} />
+        <MusicaFondo videoId={videoId} />
       </main>
 
       <footer className="border-t border-[#d6bd7a]/25 bg-[#0e241b] px-6 py-10 text-center">

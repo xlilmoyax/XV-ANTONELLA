@@ -1,10 +1,14 @@
 // Edge Function: recordatorios (invocada por scheduler cada día)
 // Envía recordatorios de pago cada N días SOLO a confirmados con pago pendiente.
 // Reglas: nunca después de fecha_limite_pago · idempotencia por clave
-// `recordatorio:<guest_id>:<yyyy-mm-dd>` · concurrencia con `for update skip locked`.
+// `recordatorio:<guest_id>:<yyyy-mm-dd>` (la UNIQUE frena el doble envío ante
+// ejecuciones concurrentes; no hay SELECT ... FOR UPDATE, no hace falta).
 // Scheduler sugerido: pg_cron diario 10:00 America/Argentina/Buenos_Aires
+//   (requiere extensiones pg_cron + pg_net habilitadas en el proyecto)
 //   select net.http_post(url := '<functions-url>/recordatorios',
 //     headers := '{"Authorization":"Bearer <service_role>"}'::jsonb);
+// NOTA modalidades: la plantilla 'recordatorio_pago' es única hoy; cuando
+// existan plantillas por modalidad, elegir por guests.modalidad_id.
 
 import { serve } from 'https://deno.land/std@0.208.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
@@ -14,14 +18,23 @@ const EMAIL_FROM = Deno.env.get('EMAIL_FROM')!;
 const SB_URL = Deno.env.get('SUPABASE_URL')!;
 const SB_SERVICE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
-serve(async () => {
+// CORS por uniformidad (el scheduler no lo necesita, el panel de pruebas sí).
+const CORS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+};
+const J = (cuerpo: unknown, estado = 200) => Response.json(cuerpo, { status: estado, headers: CORS });
+
+serve(async (req) => {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
   const sb = createClient(SB_URL, SB_SERVICE);
   try {
     const { data: ev } = await sb.from('event_settings').select('*').limit(1).single();
-    if (!ev?.recordatorios_activos) return Response.json({ ok: true, motivo: 'pausado' });
+    if (!ev?.recordatorios_activos) return J({ ok: true, motivo: 'pausado' });
 
     const hoy = new Date().toISOString().slice(0, 10);
-    if (hoy > ev.fecha_limite_pago) return Response.json({ ok: true, motivo: 'vencido' });
+    if (hoy > ev.fecha_limite_pago) return J({ ok: true, motivo: 'vencido' });
 
     const cada = ev.recordatorio_cada_dias ?? 10;
     const { data: tpl } = await sb
@@ -39,6 +52,7 @@ serve(async () => {
       .gt('importe_estimado', 0);
 
     let enviados = 0;
+    let errores = 0;
     for (const g of candidatos ?? []) {
       // Periodicidad: solo si pasaron >= `cada` días desde el último envío a este guest.
       const { data: ultimo } = await sb
@@ -92,10 +106,11 @@ serve(async () => {
           .from('email_logs')
           .update({ estado: 'fallido', intentos: 1, error: err.slice(0, 500) })
           .eq('idempotencia_clave', clave);
+        errores += 1;
       }
     }
-    return Response.json({ ok: true, enviados });
+    return J({ ok: true, enviados, errores, candidatos: (candidatos ?? []).length });
   } catch (e) {
-    return Response.json({ ok: false, motivo: String(e).slice(0, 200) }, { status: 500 });
+    return J({ ok: false, motivo: String(e).slice(0, 200) }, 500);
   }
 });

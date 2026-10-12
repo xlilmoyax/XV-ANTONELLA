@@ -7,6 +7,7 @@ import {
   LogOut,
   Mail,
   Menu,
+  Layers,
   Palette,
   PenLine,
   RefreshCw,
@@ -14,7 +15,7 @@ import {
   Wallet,
   X,
 } from 'lucide-react';
-import { supabase } from '../lib/supabaseClient';
+import { isSupabaseConfigured, supabase } from '../lib/supabaseClient';
 import type { Attendee, Guest } from '../xv/types';
 import { calcularMetricas, type AjustesEvento, type AuditRow, type EmailLogRow, type GrupoRow, type MiembroRow, type PagoRow } from '../xv/metricas';
 import { enlacePara, vistaModalidad } from '../xv/modalidad';
@@ -29,6 +30,7 @@ import {
   Pagos,
   Pendientes,
   Resumen,
+  Tarjetas,
   Verificados,
   type Ctx,
   type SeccionId,
@@ -49,6 +51,7 @@ const NAV_PRINCIPAL: Array<{ id: SeccionId; etiqueta: string }> = [
 
 const NAV_INVITACION: Array<{ id: SeccionId; etiqueta: string }> = [
   { id: 'contenidos', etiqueta: 'Contenidos' },
+  { id: 'tarjetas', etiqueta: 'Edición de tarjetas' },
   { id: 'diseno', etiqueta: 'Diseño e imágenes' },
   { id: 'galeria', etiqueta: 'Galería' },
   { id: 'correos', etiqueta: 'Correos' },
@@ -63,6 +66,7 @@ const ICONOS: Record<SeccionId, React.ReactNode> = {
   asistente: <BookOpenText size={16} />,
   historial: <History size={16} />,
   contenidos: <PenLine size={16} />,
+  tarjetas: <Layers size={16} />,
   diseno: <Palette size={16} />,
   galeria: <Images size={16} />,
   correos: <Mail size={16} />,
@@ -77,6 +81,7 @@ const TITULOS: Record<SeccionId, { titulo: string; bajada: string }> = {
   asistente: { titulo: 'Asistente de gestión', bajada: 'Consultas de solo lectura sobre datos reales.' },
   historial: { titulo: 'Historial y auditoría', bajada: 'Acciones administrativas registradas.' },
   contenidos: { titulo: 'Contenidos del sitio', bajada: 'Textos, datos del evento y versiones.' },
+  tarjetas: { titulo: 'Edición de tarjetas', bajada: 'Familiares y Compañeros por separado, en el mismo panel.' },
   diseno: { titulo: 'Diseño e imágenes', bajada: 'Fondos y fotografía de la invitación, con vista previa y confirmación.' },
   galeria: { titulo: 'Galería', bajada: 'Fotografías de la invitación.' },
   correos: { titulo: 'Correos y recordatorios', bajada: 'Plantillas, envíos y próximos recordatorios calculados.' },
@@ -152,8 +157,16 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
   }, []);
 
   const verificarAdmin = async (em: string) => {
-    const { data } = await supabase.from('admin_profiles').select('activo').eq('email', em).maybeSingle();
-    if ((data as { activo?: boolean } | null)?.activo) {
+    const { data, error: perfilError } = await supabase
+      .from('admin_profiles')
+      .select('activo')
+      .eq('email', em)
+      .maybeSingle();
+    if (perfilError) {
+      // Fallo de consulta (red/RLS): no confundir con falta de permiso.
+      await supabase.auth.signOut();
+      setErrorLogin('No se pudo verificar el permiso (fallo de conexión). Probá de nuevo.');
+    } else if ((data as { activo?: boolean } | null)?.activo) {
       setActor(em);
       await recargar();
     } else {
@@ -200,12 +213,28 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
   const login = async (ev: FormEvent) => {
     ev.preventDefault();
     setErrorLogin(null);
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error || !data.session) {
-      setErrorLogin('Credenciales incorrectas.');
+    if (!isSupabaseConfigured) {
+      setErrorLogin('Falta la configuración del servidor. Avisá al administrador del sitio.');
       return;
     }
-    await verificarAdmin(data.session.user.email ?? email);
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (!error && data.session) {
+        await verificarAdmin(data.session.user.email ?? email);
+        return;
+      }
+      const codigo = (error as { status?: number; code?: string } | null)?.status ?? (error as { code?: string } | null)?.code;
+      const texto = `${codigo ?? ''} ${(error as Error | null)?.message ?? ''}`;
+      if (/fetch|network|offline|ECONN|timed out|Load failed|failed/i.test(texto)) {
+        setErrorLogin('No se pudo conectar con el servidor. Revisá tu conexión e intentá de nuevo.');
+      } else if (/invalid login|invalid_grant|bad request|400/i.test(texto)) {
+        setErrorLogin('Credenciales incorrectas.');
+      } else {
+        setErrorLogin('No se pudo iniciar sesión. Probá de nuevo en unos minutos.');
+      }
+    } catch {
+      setErrorLogin('No se pudo conectar con el servidor. Revisá tu conexión e intentá de nuevo.');
+    }
   };
 
   const salir = async () => {
@@ -475,6 +504,7 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
                 {foco.tab === 'asistente' && <Asistente ctx={ctx} />}
                 {foco.tab === 'historial' && <Historial ctx={ctx} />}
                 {foco.tab === 'contenidos' && <Contenidos settings={settings} sections={sections} templates={templates} versions={versions} actor={actor} recargar={recargar} />}
+                {foco.tab === 'tarjetas' && <Tarjetas ctx={ctx} />}
                 {foco.tab === 'diseno' && <Diseno ctx={ctx} />}
                 {foco.tab === 'galeria' && <GaleriaAdmin images={images} actor={actor} recargar={recargar} />}
                 {foco.tab === 'correos' && <Correos ctx={ctx} />}

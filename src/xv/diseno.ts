@@ -63,6 +63,32 @@ export const FONDOS: FondoDef[] = [
     h: 1280,
     permitePersona: false,
   },
+  // Fondos de Compañeros (TEMPORAL: reutilizan archivos A hasta recibir el
+  // arte propio B; al llegar, solo cambia el fallback, sin tocar componentes).
+  {
+    clave: 'diseno_b_portada',
+    seccion: 'Compañeros · fondo de portada (temporal: usa foto A)',
+    fallback: '/fondos/bosque-sendero.jpg',
+    w: 1920,
+    h: 1280,
+    permitePersona: false,
+  },
+  {
+    clave: 'diseno_b_jardin',
+    seccion: 'Compañeros · fondo jardín (temporal: usa foto A)',
+    fallback: '/fondos/jardin-esmeralda.jpg',
+    w: 1920,
+    h: 2880,
+    permitePersona: false,
+  },
+  {
+    clave: 'diseno_b_pagos',
+    seccion: 'Compañeros · fondo de pagos (temporal: usa foto A)',
+    fallback: '/fondos/bosque-sendero.jpg',
+    w: 1920,
+    h: 1280,
+    permitePersona: false,
+  },
 ];
 
 /** Encuadres permitidos (sin deformar: solo object-position). */

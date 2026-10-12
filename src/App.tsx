@@ -11,6 +11,7 @@ import RsvpForm from './components/RsvpForm';
 import YaAbone from './components/YaAbone';
 import { Cierre, Pie } from './components/Cierre';
 import { MarcoBotanico, Transicion } from './components/Decor';
+import MusicaFondo, { VIDEO_POR_DEFECTO } from './components/MusicaFondo';
 import { useEventSettings } from './xv/useEvent';
 import type { Screen } from './xv/types';
 import { mapaDiseno, resolverFondo } from './xv/diseno';
@@ -73,7 +74,17 @@ export default function App() {
   }
 
   if (screen === 'companeros') {
-    return <CompanerosView settings={settings} diseno={diseno} />;
+    return (
+      <CompanerosView
+        settings={settings}
+        diseno={diseno}
+        videoId={texto('musica_video', VIDEO_POR_DEFECTO)}
+        presentacion={{
+          titulo: texto('b_presentacion_titulo', 'Mis XV'),
+          texto: texto('b_presentacion_texto', ''),
+        }}
+      />
+    );
   }
 
   if (screen === 'confirmar') {
@@ -172,6 +183,7 @@ export default function App() {
         />
         <RsvpForm settings={settings} diseno={diseno} />
         <Cierre settings={settings} diseno={diseno} />
+        <MusicaFondo videoId={texto('musica_video', VIDEO_POR_DEFECTO)} />
       </main>
 
       <Pie settings={settings} />
