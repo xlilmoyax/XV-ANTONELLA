@@ -1,154 +1,95 @@
 /**
- * XV-ANTONELLA · Música de fondo (YouTube, pista provista por la familia).
- * ID por defecto de la URL compartida; editable desde el panel con la clave
- * de contenido `musica_video` (11 caracteres). Sin autoplay con sonido
- * (restricción de navegadores): suena tras el primer toque. Una sola
- * instancia por página; al cambiar de ruta se destruye y no se superpone.
- * Ante fallo de carga o video no disponible se muestra un mensaje útil
- * (nunca un estado falso de reproducción).
+ * XV-ANTONELLA · Música de fondo (MP3 local, sin YouTube ni permisos externos).
+ * Archivo esperado: `public/audio/musica-xv.mp3` (servido en
+ * `<base>/audio/musica-xv.mp3`). Componente compartido por ambas tarjetas:
+ * una sola instancia por página; al cambiar de ruta se libera y no se superpone.
+ * Sin autoplay con sonido (restricción de navegadores): suena tras el primer
+ * toque. Ante archivo ausente o error de reproducción se muestra un mensaje
+ * útil (nunca un estado falso de reproducción).
  */
 import { useEffect, useRef, useState } from 'react';
 
-export const VIDEO_POR_DEFECTO = 'i2dQiWLn4dE';
+const RUTA_AUDIO = `${import.meta.env.BASE_URL}audio/musica-xv.mp3`;
 const VOL_KEY = 'xv-musica-vol';
-const TIEMPO_MAX_CARGA_MS = 12000;
 
-interface ReproductorYT {
-  playVideo: () => void;
-  pauseVideo: () => void;
-  setVolume: (v: number) => void;
-  getVolume: () => number;
-  destroy: () => void;
-}
-
-declare global {
-  interface Window {
-    YT?: {
-      Player: new (
-        el: HTMLElement,
-        opts: {
-          videoId: string;
-          playerVars?: Record<string, string | number>;
-          events?: {
-            onReady?: () => void;
-            onStateChange?: (e: { data: number }) => void;
-            onError?: (e: { data: number }) => void;
-          };
-        },
-      ) => ReproductorYT;
-    };
-    onYouTubeIframeAPIReady?: () => void;
+function leerVol(): number {
+  try {
+    const v = Number(localStorage.getItem(VOL_KEY));
+    return Number.isFinite(v) && v >= 0 && v <= 100 ? v : 70;
+  } catch {
+    return 70;
   }
 }
 
-let apiLista: Promise<void> | null = null;
-function cargarApiYT(): Promise<void> {
-  if (typeof window === 'undefined') return Promise.resolve();
-  if (window.YT?.Player) return Promise.resolve();
-  if (!apiLista) {
-    apiLista = new Promise<void>((resolver, rechazar) => {
-      const anterior = window.onYouTubeIframeAPIReady;
-      const tope = window.setTimeout(() => rechazar(new Error('timeout-api')), TIEMPO_MAX_CARGA_MS);
-      window.onYouTubeIframeAPIReady = () => {
-        window.clearTimeout(tope);
-        anterior?.();
-        resolver();
-      };
-      const s = document.createElement('script');
-      s.src = 'https://www.youtube.com/iframe_api';
-      s.async = true;
-      s.onerror = () => {
-        window.clearTimeout(tope);
-        rechazar(new Error('script-bloqueado'));
-      };
-      document.head.appendChild(s);
-    });
-  }
-  return apiLista;
-}
-
-function idValido(id: string): boolean {
-  return /^[A-Za-z0-9_-]{11}$/.test(id);
-}
-
-export default function MusicaFondo({ videoId }: { videoId: string }) {
-  const id = idValido(videoId) ? videoId : VIDEO_POR_DEFECTO;
-  const contRef = useRef<HTMLDivElement>(null);
-  const repRef = useRef<ReproductorYT | null>(null);
-  const listoRef = useRef(false);
+export default function MusicaFondo() {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const [sonando, setSonando] = useState(false);
   const [lista, setLista] = useState(false);
   const [fallo, setFallo] = useState<string | null>(null);
-  const [vol, setVol] = useState(() => {
-    try {
-      const v = Number(localStorage.getItem(VOL_KEY));
-      return Number.isFinite(v) && v >= 0 && v <= 100 ? v : 70;
-    } catch {
-      return 70;
-    }
-  });
+  const [vol, setVol] = useState(leerVol);
 
   useEffect(() => {
     let vivo = true;
-    listoRef.current = false;
-    setLista(false);
-    setSonando(false);
-    setFallo(null);
-    cargarApiYT().then(
-      () => {
-        if (!vivo || !contRef.current || !window.YT) return;
-        try {
-          const rep = new window.YT!.Player(contRef.current, {
-            videoId: id,
-            playerVars: { autoplay: 0, controls: 0, disablekb: 1, loop: 1, playlist: id, playsinline: 1, rel: 0 },
-            events: {
-              onReady: () => {
-                if (!vivo) return;
-                listoRef.current = true;
-                try {
-                  rep.setVolume(vol);
-                } catch { /* sin volumen inicial disponible */ }
-                setLista(true);
-              },
-              onStateChange: (e) => {
-                if (!vivo) return;
-                setSonando(e.data === 1);
-              },
-              onError: () => {
-                if (!vivo) return;
-                setFallo('No se pudo cargar la música (video no disponible o sin conexión).');
-              },
-            },
-          });
-          repRef.current = rep;
-        } catch {
-          if (vivo) setFallo('No se pudo iniciar el reproductor. Revisá tu conexión.');
+    const audio = new Audio();
+    audio.preload = 'none';
+    audio.loop = true;
+    audio.volume = leerVol() / 100;
+    audioRef.current = audio;
+
+    const alPlay = () => vivo && setSonando(true);
+    const alPause = () => vivo && setSonando(false);
+    const alError = () => {
+      if (vivo) setFallo('No se pudo reproducir la música. Revisá tu conexión.');
+    };
+    audio.addEventListener('play', alPlay);
+    audio.addEventListener('pause', alPause);
+    audio.addEventListener('error', alError);
+
+    // Detección honesta del archivo (sin inventar éxito): HEAD barato al montar.
+    // 404/archivo ausente → mensaje con la ruta esperada, no promesa falsa.
+    fetch(RUTA_AUDIO, { method: 'HEAD', cache: 'no-store' }).then(
+      (r) => {
+        if (!vivo) return;
+        if (r.ok) {
+          audio.src = RUTA_AUDIO;
+          setLista(true);
+        } else {
+          setFallo('Falta el archivo de música (audio/musica-xv.mp3). Avisá al administrador.');
         }
       },
       () => {
-        if (vivo) setFallo('No se pudo cargar la música. Revisá tu conexión a internet.');
+        if (vivo) setFallo('No se pudo verificar la música. Revisá tu conexión.');
       },
     );
+
     return () => {
       vivo = false;
+      audio.removeEventListener('play', alPlay);
+      audio.removeEventListener('pause', alPause);
+      audio.removeEventListener('error', alError);
       try {
-        repRef.current?.destroy();
-      } catch { /* ya destruido */ }
-      repRef.current = null;
+        audio.pause();
+      } catch { /* ya pausado */ }
+      audio.removeAttribute('src');
+      audioRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, []);
 
   const alternar = () => {
-    const rep = repRef.current;
-    if (!rep || !listoRef.current) return;
+    const audio = audioRef.current;
+    // Sin archivo verificado no hay nada que reproducir (no finge sonido).
+    if (!audio || !lista || fallo) return;
     try {
       if (sonando) {
-        rep.pauseVideo();
+        audio.pause();
       } else {
         // Evita "reproducir" en silencio: si el volumen quedó en cero, se sube.
         if (vol === 0) cambiarVol(50);
-        rep.playVideo();
+        else audio.volume = vol / 100;
+        const promesa = audio.play();
+        if (promesa && typeof promesa.catch === 'function') {
+          promesa.catch(() => setFallo('El navegador bloqueó la reproducción. Tocá de nuevo para escuchar.'));
+        }
       }
     } catch {
       setFallo('No se pudo controlar la reproducción. Probá de nuevo.');
@@ -162,7 +103,7 @@ export default function MusicaFondo({ videoId }: { videoId: string }) {
       localStorage.setItem(VOL_KEY, String(nv));
     } catch { /* almacenamiento no disponible */ }
     try {
-      repRef.current?.setVolume(nv);
+      if (audioRef.current) audioRef.current.volume = nv / 100;
     } catch { /* sin reproductor aún */ }
   };
 
@@ -171,7 +112,6 @@ export default function MusicaFondo({ videoId }: { videoId: string }) {
       className="fixed bottom-4 right-4 z-40 flex items-center gap-2 rounded-full border border-[#d6bd7a]/50 bg-[#0e241b]/85 py-2 pl-2 pr-3 shadow-lg backdrop-blur"
       style={{ marginBottom: 'env(safe-area-inset-bottom)' }}
     >
-      <div ref={contRef} aria-hidden="true" className="h-px w-px overflow-hidden opacity-0" />
       <button
         onClick={alternar}
         aria-pressed={sonando}

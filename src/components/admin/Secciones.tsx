@@ -32,6 +32,8 @@ import {
   type MapaSync,
 } from '../../xv/sincronia';
 import type { Attendee, Guest } from '../../xv/types';
+import { emailArchivadoPara, esArchivada, hayVigente, normalizarEmail } from '../../xv/inscripcion';
+import { TEXTOS_B } from '../../xv/textosB';
 import {
   ENCUADRES,
   FONDOS,
@@ -200,13 +202,37 @@ export function Invitados({
   const eliminarFila = async (g: Guest) => {
     const v = vinculosDe(ctx, g.id);
     if (v.total > 0) {
-      setNota(`No se puede eliminar a ${g.nombre_apellido}: tiene elementos vinculados. Usá “Dar de baja”.`);
+      setNota(`No se puede eliminar a ${g.nombre_apellido}: tiene elementos vinculados. Usá “Archivar”.`);
       return;
     }
     if (!window.confirm(`Eliminar DEFINITIVAMENTE a ${g.nombre_apellido}? No tiene elementos vinculados. Esta acción no se puede deshacer.`)) return;
     setGestionId(g.id);
     try {
       setNota(await eliminarInvitado(ctx, g));
+    } catch (e) {
+      setNota(e instanceof Error ? e.message : 'Error inesperado.');
+    } finally {
+      setGestionId(null);
+    }
+  };
+
+  const archivarFila = async (g: Guest) => {
+    if (!window.confirm(`Eliminar la inscripción de ${g.nombre_apellido}? Se libera su correo para reutilizarlo y el historial (acompañantes, pagos, envíos) se conserva archivado. Se puede restaurar.`)) return;
+    setGestionId(g.id);
+    try {
+      setNota(await archivarInvitado(ctx, g));
+    } catch (e) {
+      setNota(e instanceof Error ? e.message : 'Error inesperado.');
+    } finally {
+      setGestionId(null);
+    }
+  };
+
+  const restaurarFila = async (g: Guest) => {
+    if (!window.confirm(`Restaurar la inscripción de ${g.nombre_apellido} con su correo original?`)) return;
+    setGestionId(g.id);
+    try {
+      setNota(await restaurarInvitado(ctx, g));
     } catch (e) {
       setNota(e instanceof Error ? e.message : 'Error inesperado.');
     } finally {
@@ -318,7 +344,7 @@ export function Invitados({
             <tbody>
               {paginados.map((g) => (
                 <tr key={g.id} className="border-t border-stone-200 text-stone-900">
-                  <td className="p-3"><p className="font-medium">{g.nombre_apellido}</p><p className="text-xs text-stone-500">{g.email}</p></td>
+                  <td className="p-3"><p className="font-medium">{g.nombre_apellido}</p><p className="text-xs text-stone-500">{g.email}</p>{esArchivada(g.email) && <p className="mt-0.5 inline-block rounded-full bg-stone-200 px-2 py-0.5 text-[10px] font-medium text-stone-700">archivada · correo liberado</p>}</td>
                   <td className="p-3">{g.apellido_familiar ?? '—'}</td>
                   <td className="p-3 text-xs">{etiquetaModalidad(ctx, modalidadDe(g))}</td>
                   <td className="p-3 text-xs tabular-nums">{fechaCorta(g.created_at)}</td>
@@ -353,8 +379,18 @@ export function Invitados({
                       <div className="flex flex-wrap gap-x-2 gap-y-1">
                         <button onClick={() => setDetalleId(g.id)} className="text-xs font-medium text-[#0e5c42] underline underline-offset-2">Abrir</button>
                         <button onClick={() => setEditando(g)} className="text-xs font-medium text-[#0e5c42] underline underline-offset-2">Editar</button>
-                        <button onClick={() => void bajaFila(g)} disabled={gestionId === g.id} className="text-xs font-medium text-amber-800 underline underline-offset-2 disabled:opacity-40">Dar de baja</button>
-                        <button onClick={() => void eliminarFila(g)} disabled={gestionId === g.id} className="text-xs font-medium text-red-800 underline underline-offset-2 disabled:opacity-40">Eliminar</button>
+                        {esArchivada(g.email) ? (
+                          <button onClick={() => void restaurarFila(g)} disabled={gestionId === g.id} className="text-xs font-medium text-[#0e5c42] underline underline-offset-2 disabled:opacity-40">Restaurar</button>
+                        ) : (
+                          <>
+                            <button onClick={() => void bajaFila(g)} disabled={gestionId === g.id} className="text-xs font-medium text-amber-800 underline underline-offset-2 disabled:opacity-40">Dar de baja</button>
+                            {vinculosDe(ctx, g.id).total > 0 ? (
+                              <button onClick={() => void archivarFila(g)} disabled={gestionId === g.id} title="Elimina liberando el correo; conserva el historial" className="text-xs font-medium text-red-800 underline underline-offset-2 disabled:opacity-40">Archivar</button>
+                            ) : (
+                              <button onClick={() => void eliminarFila(g)} disabled={gestionId === g.id} className="text-xs font-medium text-red-800 underline underline-offset-2 disabled:opacity-40">Eliminar</button>
+                            )}
+                          </>
+                        )}
                       </div>
                     </div>
                   </td>
@@ -441,17 +477,24 @@ function EditarInvitado({ ctx, guest: g, onCerrar }: { ctx: Ctx; guest: Guest; o
     }
     setGuardando(true);
     try {
-      // Duplicado dentro de la misma base (el UNIQUE es el árbitro final).
+      // Duplicado vigente dentro de la misma base (el UNIQUE es el árbitro
+      // final ante concurrencia: correos archivados o dados de baja no bloquean).
       const { data: dup, error: dupErr } = await supabase
         .from('guests')
-        .select('id')
+        .select('id,email,asistencia')
         .eq('email', emailLimpio)
         .neq('id', g.id)
         .limit(1)
         .maybeSingle();
       if (dupErr) throw new Error(`No se pudo verificar duplicados: ${dupErr.message}`);
-      if (dup) {
-        setError('Ese correo ya está registrado en otro invitado.');
+      if (
+        dup &&
+        hayVigente(
+          [{ email: (dup as { email: string }).email, asistencia: (dup as { asistencia: string }).asistencia }],
+          emailLimpio,
+        )
+      ) {
+        setError('Ese correo ya está registrado en una inscripción vigente.');
         return;
       }
       const patch = {
@@ -468,7 +511,12 @@ function EditarInvitado({ ctx, guest: g, onCerrar }: { ctx: Ctx; guest: Guest; o
         observaciones: observaciones.trim() || null,
       };
       const { error } = await supabase.from('guests').update(patch).eq('id', g.id);
-      if (error) throw new Error(`No se pudo guardar: ${error.message}`);
+      if (error) {
+        if ((error as { code?: string }).code === '23505') {
+          throw new Error('Ese correo ya está registrado en una inscripción vigente.');
+        }
+        throw new Error(`No se pudo guardar: ${error.message}`);
+      }
       const aviso = await auditar(ctx.actor, 'guests', g.id, 'editar', g, patch);
       if (aviso) {
         setError(`${aviso} (los datos se guardaron igual).`);
@@ -598,6 +646,86 @@ export async function eliminarInvitado(ctx: Ctx, g: Guest): Promise<string> {
   return 'Registro eliminado definitivamente.';
 }
 
+/**
+ * Eliminación con historia: archiva la inscripción liberando el correo real.
+ * - El correo pasa a un alias único `@archivados.local`: el UNIQUE deja de
+ *   verlo y el correo real queda libre para una nueva inscripción.
+ * - Dependientes resueltos EXPLÍCITAMENTE por preservación: acompañantes,
+ *   avisos de pago (con comprobantes), envíos y grupos NO se tocan; la
+ *   auditoría guarda el snapshot completo. Nada se borra indiscriminadamente.
+ * - Solo admin (RLS g_admin). No toca cuentas Auth (los invitados no tienen).
+ * - Reversible con restaurarInvitado (correo original en la auditoría).
+ */
+export async function archivarInvitado(ctx: Ctx, g: Guest): Promise<string> {
+  const correo = normalizarEmail(g.email);
+  const tumba = emailArchivadoPara(g.id);
+  const grupos = ctx.members
+    .filter((m) => m.guest_id === g.id)
+    .map((m) => ctx.groups.find((gr) => gr.id === m.group_id)?.nombre ?? m.group_id);
+  const anteriores = {
+    guest: { ...g },
+    attendees: ctx.attendees.filter((a) => a.guest_id === g.id),
+    payments: ctx.payments
+      .filter((p) => p.guest_id === g.id)
+      .map((p) => ({ id: p.id, monto: p.monto, estado: p.estado, medio: p.medio ?? null, informado_at: p.informado_at ?? null, verificado_at: p.verificado_at ?? null })),
+    grupos,
+    envios: ctx.logs
+      .filter((l) => l.guest_id === g.id)
+      .map((l) => ({ id: l.id, tipo: l.tipo, estado: l.estado, enviado_at: l.enviado_at ?? null })),
+  };
+  const patch = { email: tumba, asistencia: 'no_asistira', estado_pago: 'no_corresponde' };
+  const { error } = await supabase.from('guests').update(patch).eq('id', g.id);
+  if (error) throw new Error(`No se pudo eliminar: ${error.message}`);
+  const aviso = await auditar(ctx.actor, 'guests', g.id, 'archivar', anteriores, {
+    email_archivado: tumba,
+    correo_liberado: correo,
+  });
+  await ctx.recargar();
+  const base = `Inscripción eliminada. Se liberó ${correo} y el historial se conserva archivado.`;
+  return aviso ? `${base} (${aviso})` : base;
+}
+
+/**
+ * Revierte un archivado: devuelve el correo original y el estado previo
+ * (leídos del snapshot de auditoría). Falla cerrado con causa concreta si
+ * el correo ya está en uso por otra inscripción.
+ */
+export async function restaurarInvitado(ctx: Ctx, g: Guest): Promise<string> {
+  const { data, error } = await supabase
+    .from('audit_logs')
+    .select('anteriores,nuevos')
+    .eq('entidad', 'guests')
+    .eq('registro_id', g.id)
+    .eq('accion', 'archivar')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`No se pudo leer la auditoría: ${error.message}`);
+  const nuevos = (data as { nuevos?: { correo_liberado?: string } } | null)?.nuevos;
+  const snap = (data as { anteriores?: { guest?: Guest } } | null)?.anteriores?.guest;
+  const original = nuevos?.correo_liberado ?? snap?.email;
+  if (!original) throw new Error('La auditoría no conserva el correo original: no se puede restaurar.');
+  const { data: colision, error: colErr } = await supabase
+    .from('guests')
+    .select('id')
+    .eq('email', original)
+    .neq('id', g.id)
+    .limit(1)
+    .maybeSingle();
+  if (colErr) throw new Error(`No se pudo verificar el correo: ${colErr.message}`);
+  if (colision) throw new Error(`No se puede restaurar: ${original} ya está en uso por otra inscripción.`);
+  const patch = {
+    email: original,
+    asistencia: snap?.asistencia ?? 'pendiente',
+    estado_pago: snap?.estado_pago ?? 'pendiente_pago',
+  };
+  const { error: updErr } = await supabase.from('guests').update(patch).eq('id', g.id);
+  if (updErr) throw new Error(`No se pudo restaurar: ${updErr.message}`);
+  await auditar(ctx.actor, 'guests', g.id, 'restaurar', { email_archivado: g.email }, patch);
+  await ctx.recargar();
+  return `Inscripción restaurada con ${original}.`;
+}
+
 function DetalleInvitado({ ctx, guest: g, onCerrar }: { ctx: Ctx; guest: Guest; onCerrar: () => void }) {
   const acomp = ctx.attendees.filter((a) => a.guest_id === g.id);
   const pagos = ctx.payments.filter((p) => p.guest_id === g.id);
@@ -714,9 +842,44 @@ function DetalleInvitado({ ctx, guest: g, onCerrar }: { ctx: Ctx; guest: Guest; 
             Eliminar definitivamente
           </button>
         ) : (
-          <p className="text-xs text-stone-500 self-center">
-            Eliminación bloqueada: tiene elementos vinculados. Usá “Dar de baja”.
-          </p>
+          <button
+            disabled={gestionando}
+            onClick={async () => {
+              if (!window.confirm(`Eliminar la inscripción de ${g.nombre_apellido}? Se libera su correo para reutilizarlo y el historial (acompañantes, pagos, envíos) se conserva archivado. Se puede restaurar.`)) return;
+              setGestionando(true);
+              setGestionMsg(null);
+              try {
+                setGestionMsg(await archivarInvitado(ctx, g));
+              } catch (e) {
+                setGestionMsg(e instanceof Error ? e.message : 'Error inesperado.');
+              } finally {
+                setGestionando(false);
+              }
+            }}
+            className="rounded-full border border-red-300 px-4 py-2 text-xs font-medium text-red-800 disabled:opacity-50"
+          >
+            Archivar (libera el correo, conserva todo)
+          </button>
+        )}
+        {esArchivada(g.email) && (
+          <button
+            disabled={gestionando}
+            onClick={async () => {
+              if (!window.confirm(`Restaurar la inscripción de ${g.nombre_apellido} con su correo original?`)) return;
+              setGestionando(true);
+              setGestionMsg(null);
+              try {
+                setGestionMsg(await restaurarInvitado(ctx, g));
+              } catch (e) {
+                setGestionMsg(e instanceof Error ? e.message : 'Error inesperado.');
+              } finally {
+                setGestionando(false);
+              }
+            }}
+            className="rounded-full border border-[#68785b] px-4 py-2 text-xs font-medium text-[#183b2d] disabled:opacity-50"
+          >
+            Restaurar inscripción
+          </button>
         )}
       </div>
     </div>
@@ -2118,6 +2281,56 @@ function NuevaSeccion({
   );
 }
 
+/* ---------- Crear un texto del catálogo que aún no existe en la DB ---------- */
+function CrearTexto({
+  def,
+  actor,
+  recargar,
+  onMsg,
+}: {
+  def: { clave: string; etiqueta: string; defecto: string };
+  actor: string | null;
+  recargar: () => Promise<void>;
+  onMsg: (m: string | null) => void;
+}) {
+  const [creando, setCreando] = useState(false);
+  const crear = async () => {
+    setCreando(true);
+    try {
+      const { data, error } = await supabase
+        .from('content_sections')
+        .insert({ clave: def.clave, titulo: def.etiqueta, cuerpo: def.defecto, visible: true, orden: 200 })
+        .select('id')
+        .single();
+      if (error) {
+        if ((error as { code?: string }).code === '23505') {
+          onMsg(`«${def.clave}» ya existe: recargando la lista…`);
+          await recargar();
+        } else {
+          onMsg(`No se pudo crear «${def.clave}»: ${error.message}`);
+        }
+        return;
+      }
+      await auditar(actor, 'content_sections', (data as { id: string }).id, 'crear', null, { clave: def.clave });
+      onMsg(`«${def.clave}» creado con su valor actual: ya podés editarlo arriba.`);
+      await recargar();
+    } finally {
+      setCreando(false);
+    }
+  };
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-dashed border-stone-300 bg-white p-3">
+      <p className="text-sm text-stone-700">
+        <code>{def.clave}</code> · {def.etiqueta}
+        <span className="block text-xs text-stone-500">Valor actual: {def.defecto || '(vacío)'}</span>
+      </p>
+      <button disabled={creando} onClick={crear} className="rounded-full bg-[#183b2d] px-4 py-1.5 text-xs font-medium text-white disabled:opacity-50">
+        {creando ? 'CREANDO…' : 'CREAR'}
+      </button>
+    </div>
+  );
+}
+
 /* ---------- Bloque reutilizable de textos (A y B lo comparten sin duplicar) ---------- */
 function BloqueTextos({
   sections,
@@ -2125,15 +2338,21 @@ function BloqueTextos({
   recargar,
   filtro,
   nota,
+  creables,
 }: {
   sections: R[];
   actor: string | null;
   recargar: () => Promise<void>;
   filtro: (clave: string) => boolean;
   nota?: string;
+  /** Catálogo de claves esperadas aún no creadas (solo lo usa la tarjeta B). */
+  creables?: Array<{ clave: string; grupo: string; etiqueta: string; defecto: string }>;
 }) {
   const [msg, setMsg] = useState<string | null>(null);
   const lista = sections.filter((s) => filtro(s.clave as string));
+  const existentes = new Set(lista.map((s) => s.clave as string));
+  const faltantes = (creables ?? []).filter((c) => !existentes.has(c.clave));
+  const grupos = [...new Set(faltantes.map((c) => c.grupo))];
   return (
     <div>
       <h3 className="font-serifada text-xl text-[#183b2d]">Textos de la invitación</h3>
@@ -2197,6 +2416,24 @@ function BloqueTextos({
         </details>
       ))}
       {msg && <p className="mt-2 text-sm text-stone-700">{msg}</p>}
+      {faltantes.length > 0 && (
+        <div className="mt-4">
+          <h4 className="font-serifada text-lg text-[#183b2d]">Textos aún no creados ({faltantes.length})</h4>
+          <p className="text-xs text-stone-500">
+            La tarjeta muestra hoy sus valores originales. Creá cada clave para poder editarla y guardarla en la base.
+          </p>
+          {grupos.map((gr) => (
+            <div key={gr} className="mt-3">
+              <p className="text-xs font-medium uppercase tracking-[0.15em] text-stone-500">{gr}</p>
+              <div className="mt-1 space-y-2">
+                {faltantes.filter((c) => c.grupo === gr).map((c) => (
+                  <CrearTexto key={c.clave} def={c} actor={actor} recargar={recargar} onMsg={setMsg} />
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -2857,7 +3094,8 @@ export function Tarjetas({ ctx }: { ctx: Ctx }) {
             actor={ctx.actor}
             recargar={ctx.recargar}
             filtro={(c) => c.startsWith('b_')}
-            nota="Textos exclusivos de Compañeros (portada, presentación). La fotografía de Antonella es compartida."
+            creables={TEXTOS_B}
+            nota="Textos exclusivos de Compañeros (portada, presentación, información, pagos, formulario y pie). La fotografía de Antonella es compartida."
           />
           <Diseno ctx={ctx} defs={FONDOS.filter((d) => d.clave.startsWith('diseno_b_'))} />
         </div>

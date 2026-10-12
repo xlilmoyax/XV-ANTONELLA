@@ -1,29 +1,38 @@
 -- ============================================================
--- XV-ANTONELLA · PROPUESTA 0008 · Unicidad por correo solo en vigentes
+-- XV-ANTONELLA · PROPUESTA 0008 · Unicidad vigente por correo y modalidad
 -- Estado: PROPUESTA — NO aplicada, NO está en migrations/ (db push la ignora).
 --
--- PROBLEMA: la baja lógica conserva la fila (asistencia='no_asistira') pero
--- UNIQUE(email) la bloquea para siempre: un dado de baja no puede reinscribirse
--- y el borrado físico es la única salida. Regla de negocio: UNA inscripción
--- VIGENTE por correo (y por modalidad cuando exista modalidad_id).
+-- REGLA: un correo normalizado tiene como máximo UNA inscripción VIGENTE
+-- por modalidad. El mismo correo puede tener una inscripción en cada
+-- modalidad distinta. Vigente = asistencia <> 'no_asistira' Y correo real
+-- (los alias `@archivados.local` del archivado quedan exentos por el filtro).
+-- Normalización: citext ya compara insensible a mayúsculas; el cliente envía
+-- trim+lowercase (RPC 0003 y formularios). Seguro ante concurrencia: el
+-- índice es el árbitro (violación → 23505 → mensaje 'duplicado').
 --
--- SOLUCIÓN: índice único PARCIAL (los UNIQUE simples no admiten WHERE).
--- Seguro ante concurrencia: el índice es el árbitro, no una consulta previa.
---   - Dos activos con mismo correo → 23505 (mensajes actuales siguen vigentes).
---   - Dado de baja → reinscripción permitida (el viejo está exento del índice).
---   - Borrado físico → libera igual que hoy.
--- PRECONDICIÓN (ejecutar antes, debe dar 0 filas):
+-- FASE A (esquema actual, SIN modalidad_id): índice parcial solo por correo.
+-- PRECONDICIÓN A (debe dar 0 filas; si no, conciliar a mano, no borrar):
 --   SELECT email, count(*) FROM guests WHERE asistencia <> 'no_asistira'
 --   GROUP BY email HAVING count(*) > 1;
---   Si devuelve filas, conciliar manualmente primero (no borrar en masa).
--- EVOLUCIÓN: al aplicar modalidad_id (propuesta 0006/0007), reemplazar por
---   UNIQUE(email, modalidad_id) WHERE asistencia <> 'no_asistira'.
--- ROLLBACK: drop index + re-add constraint (falla si hubiera duplicados
--- activos: verificar con la misma consulta antes de revertir).
+--   alter table guests drop constraint guests_email_unico;
+--   create unique index guests_email_vigente_idx
+--     on guests (email) where asistencia <> 'no_asistira';
+-- ROLLBACK A:
+--   drop index if exists guests_email_vigente_idx;
+--   alter table guests add constraint guests_email_unico unique (email);
+--   (falla si hubiera duplicados activos: verificar precondición antes).
+--
+-- FASE B (tras 0006+0007 aplicadas, CON modalidad_id NOT NULL): compuesta.
+-- PRECONDICIÓN B (debe dar 0 filas):
+--   SELECT email, modalidad_id, count(*) FROM guests
+--   WHERE asistencia <> 'no_asistira'
+--   GROUP BY email, modalidad_id HAVING count(*) > 1;
+--   drop index if exists guests_email_vigente_idx;
+--   create unique index guests_email_modalidad_vigente_idx
+--     on guests (email, modalidad_id) where asistencia <> 'no_asistira';
+-- ROLLBACK B: drop index + recrear el índice de FASE A.
+--
+-- COMPATIBILIDAD: el código vigente (formularios, RPC 0003, panel) ya mapea
+-- 23505 a 'duplicado'; el pre-chequeo del panel usa hayVigente() con la misma
+-- semántica. Sin cambios de RLS (índices, no políticas).
 -- ============================================================
-
-alter table guests drop constraint guests_email_unico;
-
-create unique index guests_email_vigente_idx
-  on guests (email)
-  where asistencia <> 'no_asistira';
