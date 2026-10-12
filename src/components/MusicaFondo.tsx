@@ -1,11 +1,12 @@
 /**
  * XV-ANTONELLA · Música de fondo (MP3 local, sin YouTube ni permisos externos).
- * Canción elegida: BTOB «For You» (OST de Goblin, Warner Music Korea,
- * https://youtu.be/A1aRHQ6EnXE) — obra comercial con derechos de autor.
+ * Canción elegida: BTOB «For You» (OST de Cinderella and Four Knights,
+ * Warner Music Korea, https://youtu.be/A1aRHQ6EnXE) — obra comercial con
+ * derechos de autor.
  * Solo puede usarse con un archivo autorizado (compra/descarga con licencia).
- * Archivo autorizado esperado: `public/audio/musica-xv.mp3` (servido en
- * `<base>/audio/musica-xv.mp3`). Sin ese archivo NO hay música: el componente
- * lo informa en vez de simularla. Componente compartido por ambas tarjetas:
+ * Archivo en `public/audio/` con el nombre real que trajo (BTOB – For You).
+ * Sin ese archivo NO hay música: el componente lo informa en vez de simularla.
+ * Componente compartido por ambas tarjetas:
  * una sola instancia por página; al cambiar de ruta se libera y no se superpone.
  * Se intenta autoplay al abrir; los navegadores lo bloquean sin interacción
  * previa: ante el bloqueo queda el control manual visible (nunca un estado
@@ -13,7 +14,19 @@
  */
 import { useEffect, useRef, useState } from 'react';
 
-const RUTA_AUDIO = `${import.meta.env.BASE_URL}audio/musica-xv.mp3`;
+/**
+ * Nombre real del archivo en public/audio, por puntos de código (byte-exacto
+ * sin adivinar: verificado contra el disco, 58 caracteres).
+ */
+const NOMBRE_AUDIO = [
+  0xbe44, 0xd22c, 0xbe44, 0x20, 0x28, 0x42, 0x54, 0x4f, 0x42, 0x29, 0x20,
+  0x2d, 0x20, 0x46, 0x6f, 0x72, 0x20, 0x59, 0x6f, 0x75, 0x20, 0x28, 0xc2e0,
+  0xb370, 0xb810, 0xb77c, 0xc640, 0x20, 0xb124, 0x20, 0xba85, 0xc758, 0x20,
+  0xae30, 0xc0ac, 0x20, 0x4f, 0x53, 0x54, 0x29, 0x20, 0x5b, 0x4d, 0x75,
+  0x73, 0x69, 0x63, 0x20, 0x56, 0x69, 0x64, 0x65, 0x6f, 0x5d, 0x2e, 0x6d,
+  0x70, 0x33,
+].map((c) => String.fromCharCode(c)).join('');
+const RUTA_AUDIO = `${import.meta.env.BASE_URL}audio/${encodeURI(NOMBRE_AUDIO)}`;
 const VOL_KEY = 'xv-musica-vol';
 
 function leerVol(): number {
@@ -66,7 +79,7 @@ export default function MusicaFondo() {
             }
           } catch { /* sin autoplay: control manual */ }
         } else {
-          setFallo('Falta el archivo de música (audio/musica-xv.mp3). Avisá al administrador.');
+          setFallo(`Falta el archivo de música (${NOMBRE_AUDIO}). Avisá al administrador.`);
         }
       },
       () => {
