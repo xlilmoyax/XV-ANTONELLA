@@ -32,7 +32,7 @@ import {
   type MapaSync,
 } from '../../xv/sincronia';
 import type { Attendee, Guest } from '../../xv/types';
-import { emailArchivadoPara, esArchivada, hayVigente, normalizarEmail } from '../../xv/inscripcion';
+import { emailArchivadoPara, esArchivada, hayVigente, mensajeBloqueo, normalizarEmail, type VinculosInvitado } from '../../xv/inscripcion';
 import { TEXTOS_B } from '../../xv/textosB';
 import {
   ENCUADRES,
@@ -200,14 +200,15 @@ export function Invitados({
   };
 
   const eliminarFila = async (g: Guest) => {
-    const v = vinculosDe(ctx, g.id);
-    if (v.total > 0) {
-      setNota(`No se puede eliminar a ${g.nombre_apellido}: tiene elementos vinculados. Usá “Archivar”.`);
-      return;
-    }
-    if (!window.confirm(`Eliminar DEFINITIVAMENTE a ${g.nombre_apellido}? No tiene elementos vinculados. Esta acción no se puede deshacer.`)) return;
     setGestionId(g.id);
     try {
+      const v = await contarVinculosExactos(g.id);
+      if (v.total > 0) {
+        setNota(mensajeBloqueo(g.nombre_apellido, v));
+        return;
+      }
+      if (!window.confirm(`Eliminar DEFINITIVAMENTE a ${g.nombre_apellido}? Verificado: sin elementos vinculados. Esta acción no se puede deshacer.`)) return;
+      if (!window.confirm('Confirmá por segunda vez: se borrará el registro.')) return;
       setNota(await eliminarInvitado(ctx, g));
     } catch (e) {
       setNota(e instanceof Error ? e.message : 'Error inesperado.');
@@ -384,11 +385,8 @@ export function Invitados({
                         ) : (
                           <>
                             <button onClick={() => void bajaFila(g)} disabled={gestionId === g.id} className="text-xs font-medium text-amber-800 underline underline-offset-2 disabled:opacity-40">Dar de baja</button>
-                            {vinculosDe(ctx, g.id).total > 0 ? (
-                              <button onClick={() => void archivarFila(g)} disabled={gestionId === g.id} title="Elimina liberando el correo; conserva el historial" className="text-xs font-medium text-red-800 underline underline-offset-2 disabled:opacity-40">Archivar</button>
-                            ) : (
-                              <button onClick={() => void eliminarFila(g)} disabled={gestionId === g.id} className="text-xs font-medium text-red-800 underline underline-offset-2 disabled:opacity-40">Eliminar</button>
-                            )}
+                            <button onClick={() => void eliminarFila(g)} disabled={gestionId === g.id} title="Borrado físico: solo procede sin vinculados (se verifica)" className="text-xs font-medium text-red-800 underline underline-offset-2 disabled:opacity-40">Eliminar</button>
+                            <button onClick={() => void archivarFila(g)} disabled={gestionId === g.id} title="Elimina liberando el correo; conserva el historial" className="text-xs font-medium text-red-800 underline underline-offset-2 disabled:opacity-40">Archivar</button>
                           </>
                         )}
                       </div>
@@ -407,7 +405,7 @@ export function Invitados({
       </div>
 
       {detalle && (
-        <DetalleInvitado ctx={ctx} guest={detalle} onCerrar={() => setDetalleId(null)} />
+        <DetalleInvitado ctx={ctx} guest={detalle} onCerrar={() => setDetalleId(null)} onAviso={setNota} />
       )}
 
       {editando && (
@@ -608,12 +606,42 @@ function EditarInvitado({ ctx, guest: g, onCerrar }: { ctx: Ctx; guest: Guest; o
   );
 }
 
-/** Vínculos que impiden un borrado físico (misma regla en listado y detalle). */
+/**
+ * Vínculos para MOSTRAR (ventana cargada en memoria, con límites).
+ * La DECISIÓN de seguridad usa contarVinculosExactos (conteos en servidor).
+ */
 export function vinculosDe(ctx: Ctx, id: string): { acomp: number; pagos: number; envios: number; grupos: number; total: number } {
   const acomp = ctx.attendees.filter((a) => a.guest_id === id).length;
   const pagos = ctx.payments.filter((p) => p.guest_id === id).length;
   const envios = ctx.logs.filter((l) => l.guest_id === id).length;
   const grupos = ctx.members.filter((m) => m.guest_id === id).length;
+  return { acomp, pagos, envios, grupos, total: acomp + pagos + envios + grupos };
+}
+
+export interface Vinculos extends VinculosInvitado {
+  total: number;
+}
+
+/**
+ * Conteos EXACTOS en el servidor (las listas del panel usan ventanas con
+ * límite: jamás decidir un borrado con ellas). Falla cerrado: si no se puede
+ * verificar, se bloquea el físico con la causa concreta.
+ */
+export async function contarVinculosExactos(guestId: string): Promise<Vinculos> {
+  const cuenta = async (tabla: string): Promise<number> => {
+    const { count, error } = await supabase
+      .from(tabla)
+      .select('id', { count: 'exact', head: true })
+      .eq('guest_id', guestId);
+    if (error) throw new Error(`No se pudieron verificar dependencias (${tabla}): ${error.message}`);
+    return count ?? 0;
+  };
+  const [acomp, pagos, envios, grupos] = await Promise.all([
+    cuenta('attendees'),
+    cuenta('payment_records'),
+    cuenta('email_logs'),
+    cuenta('group_members'),
+  ]);
   return { acomp, pagos, envios, grupos, total: acomp + pagos + envios + grupos };
 }
 
@@ -629,21 +657,19 @@ export async function darDeBajaInvitado(ctx: Ctx, g: Guest): Promise<string> {
 }
 
 /**
- * Borrado físico real. Falla cerrado si hay vinculados (revalida siempre).
- * No toca cuentas Auth: los invitados no tienen cuenta de acceso.
+ * Borrado físico real de la fila guests. Revalida con conteos EXACTOS siempre
+ * (Caso A: solo procede con 0 en las 4 tablas; si no, Caso B con motivo).
+ * Los CASCADE de la DB no se tocan a mano: con 0 vinculados no hay nada que
+ * arrastrar. No toca cuentas Auth: los invitados no tienen cuenta de acceso.
  */
 export async function eliminarInvitado(ctx: Ctx, g: Guest): Promise<string> {
-  const v = vinculosDe(ctx, g.id);
-  if (v.total > 0) {
-    throw new Error(
-      `No se puede eliminar: tiene ${v.acomp} acompañante(s), ${v.pagos} aviso(s), ${v.envios} envío(s), ${v.grupos} grupo(s). Usá “Dar de baja”.`,
-    );
-  }
+  const v = await contarVinculosExactos(g.id);
+  if (v.total > 0) throw new Error(mensajeBloqueo(g.nombre_apellido, v));
   const { error } = await supabase.from('guests').delete().eq('id', g.id);
   if (error) throw new Error(`No se pudo eliminar: ${error.message}`);
   await auditar(ctx.actor, 'guests', g.id, 'eliminar', g, null);
   await ctx.recargar();
-  return 'Registro eliminado definitivamente.';
+  return 'Registro eliminado definitivamente de la base de datos.';
 }
 
 /**
@@ -726,7 +752,7 @@ export async function restaurarInvitado(ctx: Ctx, g: Guest): Promise<string> {
   return `Inscripción restaurada con ${original}.`;
 }
 
-function DetalleInvitado({ ctx, guest: g, onCerrar }: { ctx: Ctx; guest: Guest; onCerrar: () => void }) {
+function DetalleInvitado({ ctx, guest: g, onCerrar, onAviso }: { ctx: Ctx; guest: Guest; onCerrar: () => void; onAviso: (m: string) => void }) {
   const acomp = ctx.attendees.filter((a) => a.guest_id === g.id);
   const pagos = ctx.payments.filter((p) => p.guest_id === g.id);
   const envios = ctx.logs.filter((l) => l.guest_id === g.id);
@@ -820,47 +846,55 @@ function DetalleInvitado({ ctx, guest: g, onCerrar }: { ctx: Ctx; guest: Guest; 
         >
           Dar de baja (conserva todo)
         </button>
-        {vinculados === 0 ? (
-          <button
-            disabled={gestionando}
-            onClick={async () => {
-              if (!window.confirm(`Eliminar DEFINITIVAMENTE a ${g.nombre_apellido}? No tiene elementos vinculados. Esta acción no se puede deshacer.`)) return;
-              if (!window.confirm('Confirmá por segunda vez: se borrará el registro.')) return;
-              setGestionando(true);
-              setGestionMsg(null);
-              try {
-                setGestionMsg(await eliminarInvitado(ctx, g));
-                onCerrar();
-              } catch (e) {
-                setGestionMsg(e instanceof Error ? e.message : 'Error inesperado.');
-              } finally {
-                setGestionando(false);
-              }
-            }}
-            className="rounded-full border border-red-300 px-4 py-2 text-xs font-medium text-red-800 disabled:opacity-50"
-          >
-            Eliminar definitivamente
-          </button>
-        ) : (
-          <button
-            disabled={gestionando}
-            onClick={async () => {
-              if (!window.confirm(`Eliminar la inscripción de ${g.nombre_apellido}? Se libera su correo para reutilizarlo y el historial (acompañantes, pagos, envíos) se conserva archivado. Se puede restaurar.`)) return;
-              setGestionando(true);
-              setGestionMsg(null);
-              try {
-                setGestionMsg(await archivarInvitado(ctx, g));
-              } catch (e) {
-                setGestionMsg(e instanceof Error ? e.message : 'Error inesperado.');
-              } finally {
-                setGestionando(false);
-              }
-            }}
-            className="rounded-full border border-red-300 px-4 py-2 text-xs font-medium text-red-800 disabled:opacity-50"
-          >
-            Archivar (libera el correo, conserva todo)
-          </button>
+        {vinculados > 0 && (
+          <p className="w-full text-xs text-stone-500">
+            Con elementos vinculados no corresponde el borrado físico (destruiría historia):
+            usá “Archivar”. El borrado físico solo procede con 0 en las 4 categorías.
+          </p>
         )}
+        <button
+          disabled={gestionando}
+          onClick={async () => {
+            setGestionando(true);
+            setGestionMsg(null);
+            try {
+              const v = await contarVinculosExactos(g.id);
+              if (v.total > 0) {
+                setGestionMsg(mensajeBloqueo(g.nombre_apellido, v));
+                return;
+              }
+              if (!window.confirm(`Eliminar DEFINITIVAMENTE a ${g.nombre_apellido}? Verificado: sin elementos vinculados. Esta acción no se puede deshacer.`)) return;
+              if (!window.confirm('Confirmá por segunda vez: se borrará el registro.')) return;
+              onAviso(await eliminarInvitado(ctx, g));
+              onCerrar();
+            } catch (e) {
+              setGestionMsg(e instanceof Error ? e.message : 'Error inesperado.');
+            } finally {
+              setGestionando(false);
+            }
+          }}
+          className="rounded-full border border-red-300 px-4 py-2 text-xs font-medium text-red-800 disabled:opacity-50"
+        >
+          Eliminar definitivamente
+        </button>
+        <button
+          disabled={gestionando}
+          onClick={async () => {
+            if (!window.confirm(`Eliminar la inscripción de ${g.nombre_apellido}? Se libera su correo para reutilizarlo y el historial (acompañantes, pagos, envíos) se conserva archivado. Se puede restaurar.`)) return;
+            setGestionando(true);
+            setGestionMsg(null);
+            try {
+              setGestionMsg(await archivarInvitado(ctx, g));
+            } catch (e) {
+              setGestionMsg(e instanceof Error ? e.message : 'Error inesperado.');
+            } finally {
+              setGestionando(false);
+            }
+          }}
+          className="rounded-full border border-red-300 px-4 py-2 text-xs font-medium text-red-800 disabled:opacity-50"
+        >
+          Archivar (libera el correo, conserva todo)
+        </button>
         {esArchivada(g.email) && (
           <button
             disabled={gestionando}
@@ -2281,56 +2315,6 @@ function NuevaSeccion({
   );
 }
 
-/* ---------- Crear un texto del catálogo que aún no existe en la DB ---------- */
-function CrearTexto({
-  def,
-  actor,
-  recargar,
-  onMsg,
-}: {
-  def: { clave: string; etiqueta: string; defecto: string };
-  actor: string | null;
-  recargar: () => Promise<void>;
-  onMsg: (m: string | null) => void;
-}) {
-  const [creando, setCreando] = useState(false);
-  const crear = async () => {
-    setCreando(true);
-    try {
-      const { data, error } = await supabase
-        .from('content_sections')
-        .insert({ clave: def.clave, titulo: def.etiqueta, cuerpo: def.defecto, visible: true, orden: 200 })
-        .select('id')
-        .single();
-      if (error) {
-        if ((error as { code?: string }).code === '23505') {
-          onMsg(`«${def.clave}» ya existe: recargando la lista…`);
-          await recargar();
-        } else {
-          onMsg(`No se pudo crear «${def.clave}»: ${error.message}`);
-        }
-        return;
-      }
-      await auditar(actor, 'content_sections', (data as { id: string }).id, 'crear', null, { clave: def.clave });
-      onMsg(`«${def.clave}» creado con su valor actual: ya podés editarlo arriba.`);
-      await recargar();
-    } finally {
-      setCreando(false);
-    }
-  };
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-dashed border-stone-300 bg-white p-3">
-      <p className="text-sm text-stone-700">
-        <code>{def.clave}</code> · {def.etiqueta}
-        <span className="block text-xs text-stone-500">Valor actual: {def.defecto || '(vacío)'}</span>
-      </p>
-      <button disabled={creando} onClick={crear} className="rounded-full bg-[#183b2d] px-4 py-1.5 text-xs font-medium text-white disabled:opacity-50">
-        {creando ? 'CREANDO…' : 'CREAR'}
-      </button>
-    </div>
-  );
-}
-
 /* ---------- Bloque reutilizable de textos (A y B lo comparten sin duplicar) ---------- */
 function BloqueTextos({
   sections,
@@ -2338,21 +2322,15 @@ function BloqueTextos({
   recargar,
   filtro,
   nota,
-  creables,
 }: {
   sections: R[];
   actor: string | null;
   recargar: () => Promise<void>;
   filtro: (clave: string) => boolean;
   nota?: string;
-  /** Catálogo de claves esperadas aún no creadas (solo lo usa la tarjeta B). */
-  creables?: Array<{ clave: string; grupo: string; etiqueta: string; defecto: string }>;
 }) {
   const [msg, setMsg] = useState<string | null>(null);
   const lista = sections.filter((s) => filtro(s.clave as string));
-  const existentes = new Set(lista.map((s) => s.clave as string));
-  const faltantes = (creables ?? []).filter((c) => !existentes.has(c.clave));
-  const grupos = [...new Set(faltantes.map((c) => c.grupo))];
   return (
     <div>
       <h3 className="font-serifada text-xl text-[#183b2d]">Textos de la invitación</h3>
@@ -2416,24 +2394,6 @@ function BloqueTextos({
         </details>
       ))}
       {msg && <p className="mt-2 text-sm text-stone-700">{msg}</p>}
-      {faltantes.length > 0 && (
-        <div className="mt-4">
-          <h4 className="font-serifada text-lg text-[#183b2d]">Textos aún no creados ({faltantes.length})</h4>
-          <p className="text-xs text-stone-500">
-            La tarjeta muestra hoy sus valores originales. Creá cada clave para poder editarla y guardarla en la base.
-          </p>
-          {grupos.map((gr) => (
-            <div key={gr} className="mt-3">
-              <p className="text-xs font-medium uppercase tracking-[0.15em] text-stone-500">{gr}</p>
-              <div className="mt-1 space-y-2">
-                {faltantes.filter((c) => c.grupo === gr).map((c) => (
-                  <CrearTexto key={c.clave} def={c} actor={actor} recargar={recargar} onMsg={setMsg} />
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
@@ -3042,6 +3002,165 @@ function TarjetaDiseno({ ctx, def }: { ctx: Ctx; def: FondoDef }) {
 }
 
 /* ---------- Tarjetas A/B: editores independientes, mismo panel ---------- */
+/* ---------- Editor de la tarjeta Compañeros: valores actuales + upsert ---------- */
+function CampoTextoB({
+  def,
+  fila,
+  actor,
+  recargar,
+  onMsg,
+}: {
+  def: { clave: string; etiqueta: string; defecto: string };
+  fila: R | null;
+  actor: string | null;
+  recargar: () => Promise<void>;
+  onMsg: (m: string | null) => void;
+}) {
+  const [guardando, setGuardando] = useState(false);
+  const id = `btxt-${def.clave}`;
+  const guardar = async () => {
+    const el = document.getElementById(id) as HTMLTextAreaElement | null;
+    const valor = el?.value ?? '';
+    setGuardando(true);
+    try {
+      if (fila) {
+        const { error } = await supabase
+          .from('content_sections')
+          .update({ cuerpo: valor })
+          .eq('id', fila.id as string);
+        if (error) {
+          onMsg(`No se pudo guardar «${def.clave}»: ${error.message}`);
+          return;
+        }
+        await auditar(actor, 'content_sections', fila.id as string, 'editar-texto', fila, { cuerpo: valor });
+      } else {
+        const { data, error } = await supabase
+          .from('content_sections')
+          .insert({ clave: def.clave, titulo: def.etiqueta, cuerpo: valor, visible: true, orden: 200 })
+          .select('id')
+          .single();
+        if (error) {
+          if ((error as { code?: string }).code === '23505') {
+            // Carrera: la clave ya existe → se actualiza esa fila, sin duplicar.
+            const { error: e2 } = await supabase
+              .from('content_sections')
+              .update({ cuerpo: valor })
+              .eq('clave', def.clave);
+            if (e2) {
+              onMsg(`No se pudo guardar «${def.clave}»: ${e2.message}`);
+              return;
+            }
+            await auditar(actor, 'content_sections', def.clave, 'editar-texto', null, { cuerpo: valor });
+          } else {
+            onMsg(`No se pudo guardar «${def.clave}»: ${error.message}`);
+            return;
+          }
+        } else {
+          await auditar(actor, 'content_sections', (data as { id: string }).id, 'crear', null, { clave: def.clave });
+        }
+      }
+      onMsg(`Texto guardado: «${def.clave}».`);
+      await recargar();
+    } finally {
+      setGuardando(false);
+    }
+  };
+  return (
+    <details className="mt-2 rounded-xl border border-stone-200 bg-white p-4">
+      <summary className="cursor-pointer text-sm text-stone-900">
+        {def.etiqueta} <code className="text-xs text-stone-500">{def.clave}</code>{' '}
+        {fila ? (
+          <span className="ml-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-900">personalizado</span>
+        ) : (
+          <span className="ml-1 rounded-full bg-stone-200 px-2 py-0.5 text-[10px] font-medium text-stone-700">valor original</span>
+        )}
+      </summary>
+      {!fila && (
+        <p className="mt-1 text-xs text-stone-500">
+          Sin fila en la base: se muestra el valor original de la tarjeta. Al guardar se crea la fila.
+        </p>
+      )}
+      {fila && fila.visible === false && (
+        <p className="mt-1 text-xs text-amber-700">Oculta en la invitación pública.</p>
+      )}
+      <textarea
+        key={`${def.clave}:${(fila?.updated_at as string) ?? 'nuevo'}`}
+        defaultValue={(fila?.cuerpo as string) ?? def.defecto}
+        rows={def.defecto.length > 80 ? 3 : 2}
+        id={id}
+        aria-label={`${def.etiqueta} (${def.clave})`}
+        className="mt-2 w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm"
+      />
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <button
+          disabled={guardando}
+          onClick={guardar}
+          className="rounded-full border border-stone-300 px-4 py-1.5 text-xs disabled:opacity-50"
+        >
+          {guardando ? 'GUARDANDO…' : 'GUARDAR TEXTO'}
+        </button>
+        {fila && (
+          <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-stone-600">
+            <input
+              type="checkbox"
+              checked={fila.visible !== false}
+              onChange={async (e) => {
+                const { error } = await supabase
+                  .from('content_sections')
+                  .update({ visible: e.target.checked })
+                  .eq('id', fila.id as string);
+                if (error) {
+                  onMsg(`No se pudo cambiar la visibilidad: ${error.message}`);
+                  return;
+                }
+                await auditar(actor, 'content_sections', fila.id as string, 'visibilidad', fila, { visible: e.target.checked });
+                onMsg(e.target.checked ? 'Sección visible.' : 'Sección oculta.');
+                await recargar();
+              }}
+            />
+            Visible
+          </label>
+        )}
+      </div>
+    </details>
+  );
+}
+
+function EditorTextosB({ ctx }: { ctx: Ctx }) {
+  const [msg, setMsg] = useState<string | null>(null);
+  const porClave = useMemo(() => {
+    const mapa = new Map<string, R>();
+    for (const s of ctx.sections) mapa.set(s.clave as string, s);
+    return mapa;
+  }, [ctx.sections]);
+  const grupos = useMemo(() => [...new Set(TEXTOS_B.map((t) => t.grupo))], []);
+  return (
+    <div>
+      <h3 className="font-serifada text-xl text-[#183b2d]">Textos de Compañeros</h3>
+      <p className="text-xs text-stone-500">
+        Cada campo muestra el valor actual de la tarjeta pública. Guardar escribe esa misma
+        fila (o la crea si no existe): nunca duplica claves.
+      </p>
+      {grupos.map((gr) => (
+        <div key={gr} className="mt-3">
+          <p className="text-xs font-medium uppercase tracking-[0.15em] text-stone-500">{gr}</p>
+          {TEXTOS_B.filter((t) => t.grupo === gr).map((t) => (
+            <CampoTextoB
+              key={t.clave}
+              def={t}
+              fila={porClave.get(t.clave) ?? null}
+              actor={ctx.actor}
+              recargar={ctx.recargar}
+              onMsg={setMsg}
+            />
+          ))}
+        </div>
+      ))}
+      {msg && <p role="status" className="mt-2 text-sm text-stone-700">{msg}</p>}
+    </div>
+  );
+}
+
 export function Tarjetas({ ctx }: { ctx: Ctx }) {
   const [cual, setCual] = useState<'A' | 'B'>('A');
   const esB = cual === 'B';
@@ -3089,14 +3208,7 @@ export function Tarjetas({ ctx }: { ctx: Ctx }) {
             lo que guardes aquí toca la otra tarjeta. Los datos del evento y las plantillas de correo
             son compartidos y se editan en la tarjeta A.
           </p>
-          <BloqueTextos
-            sections={ctx.sections}
-            actor={ctx.actor}
-            recargar={ctx.recargar}
-            filtro={(c) => c.startsWith('b_')}
-            creables={TEXTOS_B}
-            nota="Textos exclusivos de Compañeros (portada, presentación, información, pagos, formulario y pie). La fotografía de Antonella es compartida."
-          />
+          <EditorTextosB ctx={ctx} />
           <Diseno ctx={ctx} defs={FONDOS.filter((d) => d.clave.startsWith('diseno_b_'))} />
         </div>
       )}

@@ -1,11 +1,15 @@
 /**
  * XV-ANTONELLA · Música de fondo (MP3 local, sin YouTube ni permisos externos).
- * Archivo esperado: `public/audio/musica-xv.mp3` (servido en
- * `<base>/audio/musica-xv.mp3`). Componente compartido por ambas tarjetas:
+ * Canción elegida: BTOB «For You» (OST de Goblin, Warner Music Korea,
+ * https://youtu.be/A1aRHQ6EnXE) — obra comercial con derechos de autor.
+ * Solo puede usarse con un archivo autorizado (compra/descarga con licencia).
+ * Archivo autorizado esperado: `public/audio/musica-xv.mp3` (servido en
+ * `<base>/audio/musica-xv.mp3`). Sin ese archivo NO hay música: el componente
+ * lo informa en vez de simularla. Componente compartido por ambas tarjetas:
  * una sola instancia por página; al cambiar de ruta se libera y no se superpone.
- * Sin autoplay con sonido (restricción de navegadores): suena tras el primer
- * toque. Ante archivo ausente o error de reproducción se muestra un mensaje
- * útil (nunca un estado falso de reproducción).
+ * Se intenta autoplay al abrir; los navegadores lo bloquean sin interacción
+ * previa: ante el bloqueo queda el control manual visible (nunca un estado
+ * falso de reproducción).
  */
 import { useEffect, useRef, useState } from 'react';
 
@@ -53,6 +57,14 @@ export default function MusicaFondo() {
         if (r.ok) {
           audio.src = RUTA_AUDIO;
           setLista(true);
+          // Intento de autoplay: si el navegador lo bloquea (sin interacción
+          // previa), se ignora el rechazo y queda el control manual visible.
+          try {
+            const intento = audio.play();
+            if (intento && typeof intento.catch === 'function') {
+              intento.catch(() => { /* bloqueo de autoplay: control manual */ });
+            }
+          } catch { /* sin autoplay: control manual */ }
         } else {
           setFallo('Falta el archivo de música (audio/musica-xv.mp3). Avisá al administrador.');
         }

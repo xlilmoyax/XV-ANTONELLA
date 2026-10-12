@@ -40,6 +40,18 @@ export function esVigente(g: FilaInscripcion): boolean {
   return g.asistencia !== 'no_asistira' && !esArchivada(g.email);
 }
 
+export interface VinculosInvitado {
+  acomp: number;
+  pagos: number;
+  envios: number;
+  grupos: number;
+}
+
+/** Motivo concreto de bloqueo del borrado físico (puro, testeable). */
+export function mensajeBloqueo(nombre: string, v: VinculosInvitado): string {
+  return `No se puede eliminar definitivamente a ${nombre}: tiene ${v.acomp} acompañante(s), ${v.pagos} aviso(s) de pago, ${v.envios} envío(s), ${v.grupos} grupo(s). El borrado físico los destruiría: usá “Archivar”.`;
+}
+
 /**
  * ¿Existe ya una inscripción vigente que bloquee (email, modalidad)?
  * - Misma modalidad (o criterio conservador sin UUIDs) + vigente → true.
