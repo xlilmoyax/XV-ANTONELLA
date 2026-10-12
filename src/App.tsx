@@ -17,7 +17,7 @@ import type { Screen } from './xv/types';
 import { mapaDiseno, resolverFondo } from './xv/diseno';
 
 /* ÚNICA imagen con persona en toda la web (F: de espaldas, verificada).
-   Editable desde Diseño e imágenes; no reutilizar en otras secciones. */
+    Editable desde Edición de tarjetas; no reutilizar en otras secciones. */
 const ALT_FIGURA =
   'Antonella de espaldas, con vestido verde de quince años, mirando hacia la luz del bosque encantado';
 

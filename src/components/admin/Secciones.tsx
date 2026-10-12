@@ -74,8 +74,7 @@ export type SeccionId =
   | 'contenidos'
   | 'tarjetas'
   | 'galeria'
-  | 'correos'
-  | 'diseno';
+  | 'correos';
 
 type R = Record<string, unknown>;
 
@@ -183,7 +182,37 @@ export function Invitados({
   const [detalleId, setDetalleId] = useState<string | null>(null);
   const [editando, setEditando] = useState<Guest | null>(null);
   const [nota, setNota] = useState<string | null>(null);
+  const [gestionId, setGestionId] = useState<string | null>(null);
   const POR_PAGINA = 20;
+
+  const bajaFila = async (g: Guest) => {
+    if (!window.confirm(`Dar de baja a ${g.nombre_apellido}? Pasará a "No asistirá" sin pago. No se borra nada vinculado.`)) return;
+    setGestionId(g.id);
+    try {
+      setNota(await darDeBajaInvitado(ctx, g));
+    } catch (e) {
+      setNota(e instanceof Error ? e.message : 'Error inesperado.');
+    } finally {
+      setGestionId(null);
+    }
+  };
+
+  const eliminarFila = async (g: Guest) => {
+    const v = vinculosDe(ctx, g.id);
+    if (v.total > 0) {
+      setNota(`No se puede eliminar a ${g.nombre_apellido}: tiene elementos vinculados. Usá “Dar de baja”.`);
+      return;
+    }
+    if (!window.confirm(`Eliminar DEFINITIVAMENTE a ${g.nombre_apellido}? No tiene elementos vinculados. Esta acción no se puede deshacer.`)) return;
+    setGestionId(g.id);
+    try {
+      setNota(await eliminarInvitado(ctx, g));
+    } catch (e) {
+      setNota(e instanceof Error ? e.message : 'Error inesperado.');
+    } finally {
+      setGestionId(null);
+    }
+  };
 
   const filtrados = useMemo(() => {
     const t = q.trim().toLowerCase();
@@ -321,8 +350,12 @@ export function Invitados({
                   </td>
                   <td className="p-3">
                     <div className="flex gap-2">
-                      <button onClick={() => setDetalleId(g.id)} className="text-xs font-medium text-[#0e5c42] underline underline-offset-2">Abrir</button>
-                      <button onClick={() => setEditando(g)} className="text-xs font-medium text-[#0e5c42] underline underline-offset-2">Editar</button>
+                      <div className="flex flex-wrap gap-x-2 gap-y-1">
+                        <button onClick={() => setDetalleId(g.id)} className="text-xs font-medium text-[#0e5c42] underline underline-offset-2">Abrir</button>
+                        <button onClick={() => setEditando(g)} className="text-xs font-medium text-[#0e5c42] underline underline-offset-2">Editar</button>
+                        <button onClick={() => void bajaFila(g)} disabled={gestionId === g.id} className="text-xs font-medium text-amber-800 underline underline-offset-2 disabled:opacity-40">Dar de baja</button>
+                        <button onClick={() => void eliminarFila(g)} disabled={gestionId === g.id} className="text-xs font-medium text-red-800 underline underline-offset-2 disabled:opacity-40">Eliminar</button>
+                      </div>
                     </div>
                   </td>
                 </tr>
@@ -527,6 +560,44 @@ function EditarInvitado({ ctx, guest: g, onCerrar }: { ctx: Ctx; guest: Guest; o
   );
 }
 
+/** Vínculos que impiden un borrado físico (misma regla en listado y detalle). */
+export function vinculosDe(ctx: Ctx, id: string): { acomp: number; pagos: number; envios: number; grupos: number; total: number } {
+  const acomp = ctx.attendees.filter((a) => a.guest_id === id).length;
+  const pagos = ctx.payments.filter((p) => p.guest_id === id).length;
+  const envios = ctx.logs.filter((l) => l.guest_id === id).length;
+  const grupos = ctx.members.filter((m) => m.guest_id === id).length;
+  return { acomp, pagos, envios, grupos, total: acomp + pagos + envios + grupos };
+}
+
+/** Baja lógica: conserva acompañantes, pagos, envíos, grupos y auditoría. */
+export async function darDeBajaInvitado(ctx: Ctx, g: Guest): Promise<string> {
+  const antes = { ...g };
+  const patch = { asistencia: 'no_asistira', estado_pago: 'no_corresponde' };
+  const { error } = await supabase.from('guests').update(patch).eq('id', g.id);
+  if (error) throw new Error(`No se pudo dar de baja: ${error.message}`);
+  const aviso = await auditar(ctx.actor, 'guests', g.id, 'baja', antes, patch);
+  await ctx.recargar();
+  return aviso ?? 'Baja registrada. Los datos vinculados se conservaron.';
+}
+
+/**
+ * Borrado físico real. Falla cerrado si hay vinculados (revalida siempre).
+ * No toca cuentas Auth: los invitados no tienen cuenta de acceso.
+ */
+export async function eliminarInvitado(ctx: Ctx, g: Guest): Promise<string> {
+  const v = vinculosDe(ctx, g.id);
+  if (v.total > 0) {
+    throw new Error(
+      `No se puede eliminar: tiene ${v.acomp} acompañante(s), ${v.pagos} aviso(s), ${v.envios} envío(s), ${v.grupos} grupo(s). Usá “Dar de baja”.`,
+    );
+  }
+  const { error } = await supabase.from('guests').delete().eq('id', g.id);
+  if (error) throw new Error(`No se pudo eliminar: ${error.message}`);
+  await auditar(ctx.actor, 'guests', g.id, 'eliminar', g, null);
+  await ctx.recargar();
+  return 'Registro eliminado definitivamente.';
+}
+
 function DetalleInvitado({ ctx, guest: g, onCerrar }: { ctx: Ctx; guest: Guest; onCerrar: () => void }) {
   const acomp = ctx.attendees.filter((a) => a.guest_id === g.id);
   const pagos = ctx.payments.filter((p) => p.guest_id === g.id);
@@ -610,13 +681,7 @@ function DetalleInvitado({ ctx, guest: g, onCerrar }: { ctx: Ctx; guest: Guest; 
             setGestionando(true);
             setGestionMsg(null);
             try {
-              const antes = { ...g };
-              const patch = { asistencia: 'no_asistira', estado_pago: 'no_corresponde' };
-              const { error } = await supabase.from('guests').update(patch).eq('id', g.id);
-              if (error) throw new Error(`No se pudo dar de baja: ${error.message}`);
-              const aviso = await auditar(ctx.actor, 'guests', g.id, 'baja', antes, patch);
-              setGestionMsg(aviso ?? 'Baja registrada. Los datos vinculados se conservaron.');
-              await ctx.recargar();
+              setGestionMsg(await darDeBajaInvitado(ctx, g));
             } catch (e) {
               setGestionMsg(e instanceof Error ? e.message : 'Error inesperado.');
             } finally {
@@ -636,10 +701,7 @@ function DetalleInvitado({ ctx, guest: g, onCerrar }: { ctx: Ctx; guest: Guest; 
               setGestionando(true);
               setGestionMsg(null);
               try {
-                const { error } = await supabase.from('guests').delete().eq('id', g.id);
-                if (error) throw new Error(`No se pudo eliminar: ${error.message}`);
-                await auditar(ctx.actor, 'guests', g.id, 'eliminar', g, null);
-                await ctx.recargar();
+                setGestionMsg(await eliminarInvitado(ctx, g));
                 onCerrar();
               } catch (e) {
                 setGestionMsg(e instanceof Error ? e.message : 'Error inesperado.');
@@ -2019,7 +2081,7 @@ function NuevaSeccion({
       return;
     }
     if (k.startsWith('diseno_')) {
-      onMsg('Las claves diseno_* se gestionan en “Diseño e imágenes”.');
+      onMsg('Las claves diseno_* se gestionan en “Edición de tarjetas”.');
       return;
     }
     const { data, error } = await supabase
@@ -2259,7 +2321,7 @@ export function Contenidos({ settings, sections, templates, versions, actor, rec
         actor={actor}
         recargar={recargar}
         filtro={(c) => !c.startsWith('diseno_') && !c.startsWith('b_')}
-        nota="Las imágenes de diseño (diseno_*) se administran en “Diseño e imágenes”, y los textos de Compañeros (b_*) en su tarjeta. No aquí."
+          nota="Las imágenes de diseño (diseno_*) se administran en “Edición de tarjetas”, y los textos de Compañeros (b_*) en su tarjeta. No aquí."
       />
 
       <div>

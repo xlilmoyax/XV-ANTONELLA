@@ -17,7 +17,7 @@ export default function Cover({
   diseno: DisenoMap;
 }) {
   const reduceMotion = useReducedMotion();
-  // Fondo editable desde el panel (Diseño e imágenes); respaldo empaquetado si falta.
+  // Fondo editable desde el panel (Edición de tarjetas); respaldo empaquetado si falta.
   const fondo = resolverFondo(diseno, 'diseno_fondo_portada');
 
   return (

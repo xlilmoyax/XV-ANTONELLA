@@ -8,7 +8,6 @@ import {
   Mail,
   Menu,
   Layers,
-  Palette,
   PenLine,
   RefreshCw,
   Users,
@@ -23,7 +22,6 @@ import {
   Asistente,
   Contenidos,
   Correos,
-  Diseno,
   GaleriaAdmin,
   Historial,
   Invitados,
@@ -52,7 +50,6 @@ const NAV_PRINCIPAL: Array<{ id: SeccionId; etiqueta: string }> = [
 const NAV_INVITACION: Array<{ id: SeccionId; etiqueta: string }> = [
   { id: 'contenidos', etiqueta: 'Contenidos' },
   { id: 'tarjetas', etiqueta: 'Edición de tarjetas' },
-  { id: 'diseno', etiqueta: 'Diseño e imágenes' },
   { id: 'galeria', etiqueta: 'Galería' },
   { id: 'correos', etiqueta: 'Correos' },
 ];
@@ -67,7 +64,6 @@ const ICONOS: Record<SeccionId, React.ReactNode> = {
   historial: <History size={16} />,
   contenidos: <PenLine size={16} />,
   tarjetas: <Layers size={16} />,
-  diseno: <Palette size={16} />,
   galeria: <Images size={16} />,
   correos: <Mail size={16} />,
 };
@@ -82,7 +78,6 @@ const TITULOS: Record<SeccionId, { titulo: string; bajada: string }> = {
   historial: { titulo: 'Historial y auditoría', bajada: 'Acciones administrativas registradas.' },
   contenidos: { titulo: 'Contenidos del sitio', bajada: 'Textos, datos del evento y versiones.' },
   tarjetas: { titulo: 'Edición de tarjetas', bajada: 'Familiares y Compañeros por separado, en el mismo panel.' },
-  diseno: { titulo: 'Diseño e imágenes', bajada: 'Fondos y fotografía de la invitación, con vista previa y confirmación.' },
   galeria: { titulo: 'Galería', bajada: 'Fotografías de la invitación.' },
   correos: { titulo: 'Correos y recordatorios', bajada: 'Plantillas, envíos y próximos recordatorios calculados.' },
 };
@@ -505,7 +500,6 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
                 {foco.tab === 'historial' && <Historial ctx={ctx} />}
                 {foco.tab === 'contenidos' && <Contenidos settings={settings} sections={sections} templates={templates} versions={versions} actor={actor} recargar={recargar} />}
                 {foco.tab === 'tarjetas' && <Tarjetas ctx={ctx} />}
-                {foco.tab === 'diseno' && <Diseno ctx={ctx} />}
                 {foco.tab === 'galeria' && <GaleriaAdmin images={images} actor={actor} recargar={recargar} />}
                 {foco.tab === 'correos' && <Correos ctx={ctx} />}
               </>
