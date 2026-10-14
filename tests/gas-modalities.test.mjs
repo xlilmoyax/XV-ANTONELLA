@@ -257,3 +257,96 @@ test('GAS reminder pass sends only validated modality totals and requires a 10-d
     context.sb = originalSb;
   }
 });
+
+test('GAS manual recovery requires a confirmed failure and permits one test-recipient retry', () => {
+  const originalSb = context.sb;
+  const originalCfg = context.CFG;
+  const c = { DRY: false, ENVIAR: true, TEST: ['test@example.test'], BASE: 'https://example.test' };
+  const guest = {
+    ...familia,
+    id: 'recoverable-guest',
+    nombre_apellido: 'Prueba Recuperación',
+    email: 'test@example.test',
+    modalidad_id: 'mod-1',
+    asistencia: 'confirmado',
+  };
+  const previo = {
+    id: 'failed-log',
+    guest_id: guest.id,
+    tipo: 'agradecimiento',
+    destinatario: guest.email,
+    asunto: 'Antiguo',
+    estado: 'fallido',
+    intentos: 1,
+    idempotencia_clave: 'agradecimiento:' + guest.id,
+    modalidad_id: 'mod-1',
+  };
+  let currentState = 'fallido';
+  let manualAttemptExists = false;
+  let retryPosts = 0;
+  let sendCalls = 0;
+  context.CFG = () => c;
+  context.sb = (path, method, body) => {
+    if (method === 'GET' && path.includes('estado=eq.fallido')) {
+      return currentState === 'fallido' ? [previo] : [];
+    }
+    if (method === 'GET' && path.includes('idempotencia_clave=eq.')) {
+      return manualAttemptExists ? [{ id: 'manual-log' }] : [];
+    }
+    if (method === 'GET' && path.startsWith('guests?')) return [guest];
+    if (method === 'GET' && path.startsWith('email_templates?')) {
+      return [{
+        clave: 'agradecimiento',
+        asunto: 'Hola [Nombre]',
+        cuerpo: 'Hola [Nombre]: [Importe]',
+        modalidad_id: 'mod-1',
+      }];
+    }
+    if (method === 'POST' && path === 'email_logs') {
+      retryPosts += 1;
+      manualAttemptExists = true;
+      currentState = 'pendiente';
+      return [{ id: 'manual-log' }];
+    }
+    if (method === 'PATCH') {
+      currentState = body.estado;
+      return [{ id: 'manual-log' }];
+    }
+    throw new Error('Unexpected mocked Supabase request: ' + method + ' ' + path);
+  };
+  const originalSendEmail = context.GmailApp.sendEmail;
+  context.GmailApp.sendEmail = () => { sendCalls += 1; };
+  try {
+    currentState = 'pendiente';
+    assert.throws(() => context.recuperarAvisoFallido(
+      'failed-log',
+      'CONFIRMO_NO_ENTREGADO',
+      'Confirmación de destinatario de prueba',
+    ), /solo se puede recuperar/i);
+    assert.equal(sendCalls, 0);
+
+    currentState = 'fallido';
+    const result = context.recuperarAvisoFallido(
+      'failed-log',
+      'CONFIRMO_NO_ENTREGADO',
+      'Confirmación de destinatario de prueba',
+    );
+    assert.equal(result.ok, true);
+    assert.equal(retryPosts, 1);
+    assert.equal(sendCalls, 1);
+    assert.equal(currentState, 'enviado');
+
+    currentState = 'fallido';
+    assert.throws(() => context.recuperarAvisoFallido(
+      'failed-log',
+      'CONFIRMO_NO_ENTREGADO',
+      'Confirmación de destinatario de prueba',
+    ), /ya tuvo un reintento manual/i);
+    assert.equal(retryPosts, 1);
+    assert.equal(sendCalls, 1);
+  } finally {
+    context.CFG = originalCfg;
+    context.sb = originalSb;
+    context.GmailApp.sendEmail = originalSendEmail;
+  }
+});
