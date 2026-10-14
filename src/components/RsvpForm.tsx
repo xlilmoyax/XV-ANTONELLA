@@ -3,7 +3,8 @@ import type { DisenoMap } from '../xv/diseno';
 import { CheckCircle2, Minus, Plus, Send } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from '../lib/supabaseClient';
 import { whatsappUrl } from '../xv/config';
-import { debeAbonar, formatoARS, importeEstimado } from '../xv/pricing';
+import { calcularImporteModalidad, formatoARS } from '../xv/pricing';
+import { MODALIDAD_A_ESTATICA } from '../xv/modalidad';
 import { formatearFechaLarga } from '../xv/useEvent';
 import type { EventVM } from '../xv/useEvent';
 import { Seccion } from './EventInfo';
@@ -15,41 +16,13 @@ interface Acompanante {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
-export type DestinoModalidad =
-  | { accion: 'omitir' }
-  | { accion: 'usar'; id: string }
-  | { accion: 'detener'; motivo: string };
-
-/**
- * Clasifica la respuesta de modalidades para el INSERT directo (puro, testeable):
- * - tabla ausente (42P01/PGRST205/sin caché) = esquema antiguo confirmado → omitir.
- * - cualquier otro error = detener (no confundir permisos/red/conexión con esquema viejo).
- * - tabla presente sin fila = configuración incompleta → detener.
- * La rama 'omitir' es TRANSITORIA: retirar cuando 0007 + frontend verificado
- * hagan el campo obligatorio en todas las rutas.
- */
-export function decidirModalidad(
-  error: { code?: string; message?: string } | null,
-  data: { id?: string } | null,
-): DestinoModalidad {
-  if (error) {
-    const msg = `${error.code ?? ''} ${error.message ?? ''}`;
-    if (/42P01|PGRST205|does not exist|schema cache/i.test(msg)) return { accion: 'omitir' };
-    return {
-      accion: 'detener',
-      motivo: `No se pudo verificar la modalidad (${error.code ?? 'sin código'}). Probá de nuevo en unos minutos.`,
-    };
-  }
-  if (data?.id) return { accion: 'usar', id: data.id };
-  return { accion: 'detener', motivo: 'Falta la configuración de modalidad en el servidor.' };
-}
-
 export default function RsvpForm({ settings, diseno }: { settings: EventVM; diseno: DisenoMap }) {
   const [nombre, setNombre] = useState('');
   const [email, setEmail] = useState('');
   const [telefono, setTelefono] = useState('');
   const [edadTitular, setEdadTitular] = useState('');
   const [asiste, setAsiste] = useState<'si' | 'no'>('si');
+  const [modalidadConfirmada, setModalidadConfirmada] = useState(false);
   const [familia, setFamilia] = useState('');
   const [adultos, setAdultos] = useState(1);
   const [menores, setMenores] = useState(0);
@@ -87,30 +60,27 @@ export default function RsvpForm({ settings, diseno }: { settings: EventVM; dise
     });
 
   const calculo = useMemo(() => {
-    if (asiste === 'no') return { queAbonan: 0, importe: 0, total: 0, sinEdad: 0 };
+    if (asiste === 'no') return { queAbonan: 0, importe: 0, total: 0, error: null as string | null };
     const ed = edades(acompanantes);
     const edadT = edadTitular.trim() === '' ? null : Number.parseInt(edadTitular, 10);
-    const titularAbonan = debeAbonar(Number.isFinite(edadT as number) ? (edadT as number) : null, settings.edad_minima_paga);
-    let queAbonan = titularAbonan ? 1 : 0;
-    let sinEdad = edadT === null || !Number.isFinite(edadT as number) ? 0 : 0;
-    if (edadTitular.trim() === '') sinEdad += 1;
-    ed.forEach((e) => {
-      if (e === null) {
-        queAbonan += 1;
-        sinEdad += 1;
-      } else if (debeAbonar(e, settings.edad_minima_paga)) queAbonan += 1;
-    });
+    const calculo = calcularImporteModalidad(
+      MODALIDAD_A_ESTATICA.codigo,
+      [edadT !== null && Number.isFinite(edadT) ? edadT : null, ...ed],
+      adultos,
+      menores,
+    );
     return {
-      queAbonan,
-      importe: importeEstimado(queAbonan, settings.precio_tarjeta),
-      total: 1 + acompanantes.length,
-      sinEdad,
+      queAbonan: calculo.personasQueAbonan,
+      importe: calculo.importe,
+      total: adultos + menores,
+      error: calculo.error,
     };
-  }, [acompanantes, edadTitular, asiste, settings]);
+  }, [acompanantes, edadTitular, asiste, adultos, menores]);
 
   const validar = (): string | null => {
     if (nombre.trim().length < 3) return 'Contanos tu nombre y apellido.';
     if (!EMAIL_RE.test(email.trim())) return 'Revisá el correo electrónico: no parece válido.';
+    if (!modalidadConfirmada) return 'Confirmá que esta invitación corresponde a Familia y amigos.';
     if (asiste === 'no') return null;
     if (adultos < 0 || menores < 0 || adultos + menores < 1) return 'Indicá al menos 1 persona (incluyéndote).';
     if (acompanantes.length !== detalleEsperado)
@@ -121,6 +91,7 @@ export default function RsvpForm({ settings, diseno }: { settings: EventVM; dise
       const e = edades(acompanantes)[i];
       if (e === null) return `Falta la edad del acompañante ${i + 1} (en años, al día de la fiesta).`;
     }
+    if (edadTitular.trim() === '') return 'Indicá tu edad al día de la fiesta para validar la exención.';
     if (edadTitular.trim() !== '') {
       const n = Number.parseInt(edadTitular, 10);
       if (!Number.isFinite(n) || n < 0 || n > 120) return 'Revisá tu edad (en años, al día de la fiesta).';
@@ -132,6 +103,7 @@ export default function RsvpForm({ settings, diseno }: { settings: EventVM; dise
     ok: boolean;
     motivo?: string;
     guest_id?: string;
+    modalidad?: string;
     importe?: number;
     que_abonan?: number;
     total?: number;
@@ -161,6 +133,7 @@ export default function RsvpForm({ settings, diseno }: { settings: EventVM; dise
 
   /** Payload exacto de registrar_rsvp: solo datos declarados, nada de estados. */
   const construirPayload = () => ({
+    modalidad: 'familia_amigos',
     nombre_apellido: nombre.trim(),
     email: email.trim().toLowerCase(),
     telefono: telefono.trim() || null,
@@ -172,102 +145,6 @@ export default function RsvpForm({ settings, diseno }: { settings: EventVM; dise
     acompanantes: acompanantes.map((a) => ({ nombre: a.nombre.trim(), edad: a.edad.trim() })),
     observaciones: observaciones.trim() || null,
   });
-
-  const avisarCorreo = async (gid: string) => {
-    try {
-      await supabase.functions.invoke('enviar-correo', {
-        body: { tipo: 'agradecimiento', guest_id: gid },
-      });
-    } catch {
-      /* integración de correo pendiente de activar: se ignora */
-    }
-  };
-
-  // Vía de compatibilidad: INSERT directo en guests + attendees (requiere
-  // migración 0002). Se usa SOLO si la RPC aún no existe en el backend.
-  // Falla cerrado (42501) si el backend tampoco tiene 0002.
-  const enviarDirecto = async () => {
-    const asistencia = asiste === 'si' ? 'confirmado' : 'no_asistira';
-    const estadoPago =
-      asiste === 'no' || calculo.queAbonan === 0 ? 'no_corresponde' : 'pendiente_pago';
-
-    // ID generado en el cliente: el rol anónimo no tiene SELECT y RLS
-    // filtra el RETURNING, por lo que no puede leer el id de vuelta.
-    // Conocerlo de antemano permite insertar los acompañantes después
-    // sin habilitar ninguna lectura pública.
-    const guestId = crypto.randomUUID();
-
-    // Compatibilidad de modalidad (Bloqueante-1): resuelve el UUID público;
-    // ante esquema antiguo confirmado se omite; ante duda se detiene.
-    let destino: DestinoModalidad;
-    try {
-      const { data, error } = await supabase
-        .from('modalidades')
-        .select('id')
-        .eq('codigo', 'familiares')
-        .maybeSingle();
-      destino = decidirModalidad(
-        error ? { code: error.code ?? undefined, message: error.message } : null,
-        (data as { id?: string } | null) ?? null,
-      );
-    } catch {
-      destino = { accion: 'detener', motivo: 'No se pudo verificar la modalidad. Probá de nuevo en unos minutos.' };
-    }
-    if (destino.accion === 'detener') throw new Error(destino.motivo);
-    if (destino.accion === 'omitir') {
-      console.warn('[RSVP] Esquema sin modalidades: registro en modo compatibilidad (transitorio).');
-    }
-
-    const { error: gErr } = await supabase.from('guests').insert({
-      id: guestId,
-      ...(destino.accion === 'usar' ? { modalidad_id: destino.id } : {}),
-      nombre_apellido: nombre.trim(),
-      email: email.trim().toLowerCase(),
-      telefono: telefono.trim() || null,
-      asistencia,
-      apellido_familiar: familia.trim() || null,
-      cantidad_adultos: asiste === 'si' ? adultos : 0,
-      cantidad_menores: asiste === 'si' ? menores : 0,
-      observaciones: observaciones.trim() || null,
-      importe_estimado: calculo.importe,
-      estado_pago: estadoPago,
-    });
-
-    if (gErr) {
-      if ((gErr as { code?: string }).code === '23505') {
-        throw new Error(MOTIVOS.duplicado);
-      }
-      throw new Error(MENSAJE_GENERICO);
-    }
-
-    if (asiste === 'si') {
-      const edadT = edadTitular.trim() === '' ? null : Number.parseInt(edadTitular, 10);
-      const filas = [
-        {
-          guest_id: guestId,
-          nombre: nombre.trim(),
-          edad_al_evento: edadT,
-          es_titular: true,
-          debe_abonar: debeAbonar(edadT, settings.edad_minima_paga),
-        },
-        ...acompanantes.map((a, i) => {
-          const e = edades(acompanantes)[i] as number;
-          return {
-            guest_id: guestId,
-            nombre: a.nombre.trim(),
-            edad_al_evento: e,
-            es_titular: false,
-            debe_abonar: debeAbonar(e, settings.edad_minima_paga),
-          };
-        }),
-      ];
-      const { error: aErr } = await supabase.from('attendees').insert(filas);
-      if (aErr) throw new Error('Guardamos tu confirmación pero falló el detalle. Avisanos por WhatsApp.');
-    }
-
-    await avisarCorreo(guestId);
-    setExito({ importe: calculo.importe, queAbonan: calculo.queAbonan, total: asiste === 'si' ? calculo.total : 0 });
-  };
 
   const enviar = async (ev: FormEvent) => {
     ev.preventDefault();
@@ -285,10 +162,6 @@ export default function RsvpForm({ settings, diseno }: { settings: EventVM; dise
     }
     setEnviando(true);
     try {
-      // Vía preferida: RPC atómica registrar_rsvp (migración 0003 aplicada).
-      // Si la función aún no existe en el backend, se usa el INSERT directo
-      // (enviarDirecto, requiere 0002). En ningún orden de despliegue el
-      // formulario queda sin una vía válida de registro.
       const { data, error } = await supabase.rpc('registrar_rsvp', {
         payload: construirPayload(),
       });
@@ -299,13 +172,16 @@ export default function RsvpForm({ settings, diseno }: { settings: EventVM; dise
         // informa éxito aunque ok sea true (resultado ambiguo → error).
         if (
           typeof resp.guest_id !== 'string' ||
+          resp.modalidad !== MODALIDAD_A_ESTATICA.codigo ||
           typeof resp.importe !== 'number' ||
           typeof resp.que_abonan !== 'number' ||
-          typeof resp.total !== 'number'
+          typeof resp.total !== 'number' ||
+          resp.importe !== calculo.importe ||
+          resp.que_abonan !== calculo.queAbonan ||
+          resp.total !== calculo.total
         ) {
-          throw new Error(MENSAJE_GENERICO);
+          throw new Error('El servidor guardó el registro pero devolvió un cálculo distinto. Contactanos antes de pagar.');
         }
-        await avisarCorreo(resp.guest_id);
         setExito({ importe: resp.importe, queAbonan: resp.que_abonan, total: resp.total });
         return;
       }
@@ -313,12 +189,11 @@ export default function RsvpForm({ settings, diseno }: { settings: EventVM; dise
         // La RPC respondió y rechazó los datos: NO se reintenta por otra vía.
         throw new Error(MOTIVOS[resp?.motivo ?? ''] ?? MENSAJE_GENERICO);
       }
-      if (!esFuncionAusente(error.code, error.message)) {
-        // Conexión, permisos, ejecución u otro 4xx/5xx: podría haberse
-        // guardado o haber un outage; no se reintenta por otra vía.
-        throw new Error(MENSAJE_GENERICO);
-      }
-      await enviarDirecto();
+      throw new Error(
+        esFuncionAusente(error.code, error.message)
+          ? 'El registro seguro aún no está habilitado. Escribinos por WhatsApp.'
+          : MENSAJE_GENERICO,
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Ocurrió un error inesperado.');
     } finally {
@@ -371,6 +246,18 @@ export default function RsvpForm({ settings, diseno }: { settings: EventVM; dise
         {vencida && ' · El plazo venció, pero igual podés escribirnos.'}
       </p>
       <form onSubmit={enviar} className="panel-lectura rounded-2xl p-5 text-left space-y-5 sm:p-8" noValidate>
+        <label className="flex items-start gap-3 rounded-xl border border-[#d6bd7a]/40 p-4 text-sm text-[#f8f4e9]">
+          <input
+            type="checkbox"
+            checked={modalidadConfirmada}
+            onChange={(e) => setModalidadConfirmada(e.target.checked)}
+            className="mt-1 accent-[#d6bd7a]"
+          />
+          <span>
+            Confirmo que mi invitación es de <strong>Familia y amigos</strong>: de 21:00 a 05:00,
+            $70.000 por persona de 10 años o más; menores de 10 años exentos. Se permiten acompañantes.
+          </span>
+        </label>
         <div className="grid sm:grid-cols-2 gap-4">
           <label className="block">
             <span className="text-xs uppercase tracking-[0.2em] text-[#a8b39a]">Nombre y apellido *</span>
@@ -405,7 +292,7 @@ export default function RsvpForm({ settings, diseno }: { settings: EventVM; dise
             />
           </label>
           <label className="block">
-            <span className="text-xs uppercase tracking-[0.2em] text-[#a8b39a]">Tu edad al día de la fiesta (opcional)</span>
+            <span className="text-xs uppercase tracking-[0.2em] text-[#a8b39a]">Tu edad al día de la fiesta *</span>
             <input
               value={edadTitular}
               onChange={(e) => setEdadTitular(e.target.value.replace(/[^0-9]/g, '').slice(0, 3))}
@@ -533,12 +420,18 @@ export default function RsvpForm({ settings, diseno }: { settings: EventVM; dise
             )}
 
             <div className="rounded-xl bg-[#183b2d]/70 border border-[#d6bd7a]/30 p-4 text-center">
-              <p className="text-sm text-[#f8f4e9]/85">
-                {calculo.total} persona(s) · {calculo.queAbonan} abonan · Menores de {settings.edad_minima_paga} no abonan
-              </p>
-              <p className="font-serifada text-3xl text-[#ecdcb0] mt-1">
-                {formatoARS(calculo.importe)}
-              </p>
+              {calculo.error ? (
+                <p className="text-sm text-[#f8f4e9]/85">{calculo.error}</p>
+              ) : (
+                <>
+                  <p className="text-sm text-[#f8f4e9]/85">
+                    {calculo.total} persona(s) · {calculo.queAbonan} abonan · Menores de 10 años no abonan
+                  </p>
+                  <p className="font-serifada text-3xl text-[#ecdcb0] mt-1">
+                    {formatoARS(calculo.importe)}
+                  </p>
+                </>
+              )}
             </div>
 
             <div className="grid sm:grid-cols-2 gap-4">

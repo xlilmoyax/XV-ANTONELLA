@@ -14,7 +14,7 @@ privado y correos automáticos (integración preparada, pendiente de activar).
 | Formulario de confirmación → Supabase | ✅ Implementado (requiere Supabase configurado) |
 | Botón «Ya Aboné» | ✅ Estructura lista (requiere Edge Function con service_role) |
 | Panel `/admin` (resumen, invitados, pagos, contenidos, galería, historial) | ✅ Base funcional |
-| Correos automáticos | ⚠️ **PREPARADO, NO ACTIVADO** — falta proveedor + credenciales (ver abajo) |
+| Correos automáticos | ⚠️ **Apps Script/Gmail en modo seguro; no activado** |
 | Dominio personalizado | Pendiente (deploy con URL temporal primero) |
 
 ## Requisitos
@@ -31,13 +31,14 @@ cp .env.example .env.local   # completar valores (nunca commitear .env.local)
 npm run dev                  # http://localhost:5173
 ```
 
+Pruebas locales: `npm test`. Build: `npm run build`. Lint: `npm run lint`.
+
 ## Variables de entorno
 
 | Variable | Dónde | Notas |
 |---|---|---|
 | `VITE_SUPABASE_URL` | Supabase → Project Settings → API | Pública, safe en frontend |
 | `VITE_SUPABASE_ANON_KEY` | Supabase → Project Settings → API | Pública, con RLS activo |
-| `EMAIL_PROVIDER` / `EMAIL_API_KEY` / `EMAIL_FROM` | Proveedor a definir | **NO configurar hasta verificar proveedor** |
 | `ADMIN_EMAIL` | La que se dé de alta en Auth | No es secreto, solo referencia |
 
 > ⚠️ Jamás usar la `service_role` key en el navegador. Solo en Edge Functions / servidor.
@@ -46,9 +47,13 @@ npm run dev                  # http://localhost:5173
 
 1. Crear proyecto en Supabase.
 2. SQL Editor → ejecutar `supabase/migrations/0001_xv_schema.sql`.
-3. Ejecutar `supabase/seed.sql` (carga datos oficiales del evento).
-4. Storage: el bucket `galeria` (público) lo crea la migración. Subir fotos desde el panel.
-5. Auth → Users → **crear el usuario admin** (ver abajo). Sin registro público.
+3. Ejecutar `supabase/migrations/0002_fix_public_insert.sql` solo tras revisar su política RLS.
+4. Ejecutar `supabase/seed.sql` (carga datos oficiales del evento).
+5. La migración `0003_modalidades_rsvp_seguro.sql` es una propuesta local pendiente de aprobación: **no ejecutar en Supabase remoto** sin autorización. No infiere modalidades ni modifica invitados existentes.
+6. Storage: el bucket `galeria` (público) lo crea la migración. Subir fotos desde el panel.
+7. Auth → Users → **crear el usuario admin** (ver abajo). Sin registro público.
+
+Las propuestas previas bajo `supabase/propuestas/` no forman parte de la secuencia aplicada. Para esta integración, usar solo la nueva migración `0003`; no aplicar en paralelo propuestas antiguas de modalidades o RPC.
 
 ## Crear la administradora (usuario solicitado: `Guadalopez`)
 
@@ -62,20 +67,11 @@ npm run dev                  # http://localhost:5173
 
 El login usa Supabase Auth real; el panel verifica `admin_profiles` en backend (RLS). Sin fila activa ahí, no hay acceso aunque haya sesión.
 
-## Correo: PENDIENTE DE VERIFICACIÓN (no activar aún)
+## Correo: APPS SCRIPT/GMAIL (no activar aún)
 
-Falta definir con la familia:
+Los envíos del repositorio quedan en Google Apps Script/Gmail. Los handlers Edge `enviar-correo` y `recordatorios` están deshabilitados localmente y responden HTTP 410; **no se hizo deploy**, por lo que cualquier versión remota anterior no se considera desactivada.
 
-1. **Proveedor** (recomendado: Resend por simplicidad con Edge Functions).
-2. **Dominio remitente verificado** (SPF/DKIM) y dirección `EMAIL_FROM`.
-3. **API key** guardada como secreto de la Edge Function (nunca en el repo).
-
-Cuando esté decidido, hay que crear:
-
-- `supabase/functions/enviar-correo` (envío inmediato de agradecimiento, idempotente por `email_logs.idempotencia_clave`).
-- `supabase/functions/ya-abone` (valida `token_accion`, marca `pago_informado`, detiene recordatorios).
-- `supabase/functions/recordatorios` (cada 10 días —configurable—, solo confirmados con pago pendiente, nunca después del 10/12/2026, con control de concurrencia e historial).
-- Scheduler: pg_cron o cron externo que invoque `recordatorios`.
+No habilitar correos durante la revisión. Las propiedades de Apps Script deben seguir en `DRY_RUN=true`, `ENVIAR_A_INVITADOS=false`, y `TEST_ONLY_EMAILS` limitada a la dirección de prueba ya autorizada. No se cambian claves, destinatarios ni propiedades desde el repositorio. Antes de usar el script por modalidad, revisar [modalidades y correo](./docs/modalidades-y-correos.md).
 
 Plantillas editables: tabla `email_templates` (`agradecimiento`, `recordatorio_pago`).
 

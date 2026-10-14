@@ -2,6 +2,7 @@
  * XV-ANTONELLA · Reglas puras de la tarjeta Compañeros (testeables sin backend).
  * Registro individual: 1 persona, 0 acompañantes. Sin exenciones: todos abonan.
  */
+import { calcularImporteModalidad } from './pricing';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
@@ -26,8 +27,8 @@ export function validarB(d: DatosB): string | null {
 }
 
 /** Importe individual: precio vigente o 0 si no asiste. */
-export function importeB(asiste: boolean, precio: number): number {
-  return asiste ? Math.max(0, precio) : 0;
+export function importeB(asiste: boolean): number {
+  return asiste ? calcularImporteModalidad('companeros', [null], 1, 0).importe : 0;
 }
 
 /**

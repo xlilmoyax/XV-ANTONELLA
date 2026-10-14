@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Download } from 'lucide-react';
 import { supabase } from '../../lib/supabaseClient';
-import { formatoARS } from '../../xv/pricing';
+import { calcularImporteModalidad, formatoARS } from '../../xv/pricing';
 import {
   cargarChats,
   construirInforme,
@@ -115,7 +115,7 @@ function etiquetaModalidad(ctx: Ctx, modalidadId?: string | null): string {
 }
 
 function modalidadDe(g: Guest): string | null {
-  return (g as unknown as { modalidad_id?: string | null }).modalidad_id ?? null;
+  return g.modalidad_id ?? null;
 }
 
 /* ==================== RESUMEN ==================== */
@@ -149,7 +149,7 @@ export function Resumen({ ctx }: { ctx: Ctx }) {
       {card('Pagos verificados', String(m.verificadosRecords.length), 'Avisos confirmados por el admin. Ver “recaudación verificada”.', 'pagos')}
       {card('Personas autorizadas', 'No disponible', 'El esquema no tiene estado de autorización. Requiere ampliación (ver Verificados).', 'verificados')}
       {card('Verificado sin autorizar', 'No disponible', 'Sin estado de autorización no se puede calcular. Ver propuesta en Verificados.', 'verificados')}
-      {card('Menores exentos', `${m.exentos.length} pers. · ${m.exentosInvitados.length} reg.`, `Menores de ${ctx.ajustes.edad_minima_paga} al día del evento. No generan deuda.`, 'verificados')}
+      {card('Menores exentos', `${m.exentos.length} pers. · ${m.exentosInvitados.length} reg.`, 'Menores de 10 años de Familia y amigos. No generan deuda.', 'verificados')}
       {card('Recaudación verificada', formatoARS(m.recaudadoVerificado), 'Suma de avisos verificados (montos declarados atestados, no bancarios).', 'pagos')}
       {card('Importe pendiente', formatoARS(m.importePendiente), 'Suma estimada de confirmados con pago pendiente.', 'pendientes')}
       {card('En revisión', String(m.revisionGuests.length + m.revisionRecords.length), 'Registros y avisos que requieren revisión administrativa.', 'pendientes')}
@@ -323,7 +323,12 @@ export function Invitados({
           <option value="estado">Por estado</option>
         </select>
         <button
-          onClick={() => descargarCsv(filtrados as unknown as Array<Record<string, unknown>>, 'invitados.csv')}
+          onClick={() =>
+            descargarCsv(
+              filtrados.map((g) => ({ ...g, modalidad: etiquetaModalidad(ctx, modalidadDe(g)) })),
+              'invitados.csv',
+            )
+          }
           className="inline-flex items-center gap-2 rounded-full border border-[#68785b] px-4 py-2 text-xs font-medium text-[#183b2d]"
         >
           <Download size={14} /> CSV ({filtrados.length})
@@ -439,14 +444,27 @@ function EditarInvitado({ ctx, guest: g, onCerrar }: { ctx: Ctx; guest: Guest; o
   const [telefono, setTelefono] = useState(g.telefono ?? '');
   const [familia, setFamilia] = useState(g.apellido_familiar ?? '');
   const [asistencia, setAsistencia] = useState<string>(g.asistencia);
-  const [adultos, setAdultos] = useState(String(g.cantidad_adultos));
-  const [menores, setMenores] = useState(String(g.cantidad_menores));
-  const [importe, setImporte] = useState(String(g.importe_estimado));
+  const [modalidadId, setModalidadId] = useState(g.modalidad_id ?? '');
+  const [autorizarRecalculo, setAutorizarRecalculo] = useState(false);
   const [estadoPago, setEstadoPago] = useState<string>(g.estado_pago);
   const [restricciones, setRestricciones] = useState(g.restricciones ?? '');
   const [observaciones, setObservaciones] = useState(g.observaciones ?? '');
   const [error, setError] = useState<string | null>(null);
   const [guardando, setGuardando] = useState(false);
+
+  const adultos = g.cantidad_adultos;
+  const menores = g.cantidad_menores;
+  const asistentes = ctx.attendees.filter((a) => a.guest_id === g.id);
+  const modalidad = ctx.modalidades.find((m) => m.id === modalidadId);
+  const calculo = modalidad
+    ? calcularImporteModalidad(
+        modalidad.codigo,
+        asistentes.map((a) => a.edad_al_evento),
+        adultos,
+        menores,
+      )
+    : null;
+  const modalidadCambiada = modalidadId !== (g.modalidad_id ?? '');
 
   const guardar = async () => {
     setError(null);
@@ -460,17 +478,12 @@ function EditarInvitado({ ctx, guest: g, onCerrar }: { ctx: Ctx; guest: Guest; o
       setError('El correo electrónico no parece válido.');
       return;
     }
-    const nAdultos = Number.parseInt(adultos, 10);
-    const nMenores = Number.parseInt(menores, 10);
-    const nImporte = Number.parseInt(importe, 10);
-    if (![nAdultos, nMenores, nImporte].every((n) => Number.isFinite(n) && n >= 0)) {
-      setError('Cantidades e importe deben ser números enteros no negativos.');
+    if (modalidadCambiada && !modalidadId) {
+      setError('No se puede quitar una modalidad ya clasificada.');
       return;
     }
-    // Coherencia: si cambian las cantidades, el importe debe revisarse a mano.
-    const cambioCantidades = nAdultos !== g.cantidad_adultos || nMenores !== g.cantidad_menores;
-    if (cambioCantidades && nImporte === g.importe_estimado) {
-      setError('Cambiaste las cantidades: actualizá también el importe estimado.');
+    if (autorizarRecalculo && (!calculo || calculo.error)) {
+      setError(calculo?.error ?? 'Seleccioná una modalidad válida antes de recalcular.');
       return;
     }
     setGuardando(true);
@@ -495,19 +508,18 @@ function EditarInvitado({ ctx, guest: g, onCerrar }: { ctx: Ctx; guest: Guest; o
         setError('Ese correo ya está registrado en una inscripción vigente.');
         return;
       }
-      const patch = {
+      const patch: Partial<Guest> = {
         nombre_apellido: nombreLimpio,
         email: emailLimpio,
         telefono: telefono.trim() || null,
         apellido_familiar: familia.trim() || null,
-        asistencia,
-        cantidad_adultos: nAdultos,
-        cantidad_menores: nMenores,
-        importe_estimado: nImporte,
-        estado_pago: estadoPago,
+        asistencia: asistencia as Guest['asistencia'],
+        modalidad_id: modalidadId || null,
+        estado_pago: estadoPago as Guest['estado_pago'],
         restricciones: restricciones.trim() || null,
         observaciones: observaciones.trim() || null,
       };
+      if (autorizarRecalculo && calculo) patch.importe_estimado = calculo.importe;
       const { error } = await supabase.from('guests').update(patch).eq('id', g.id);
       if (error) {
         if ((error as { code?: string }).code === '23505') {
@@ -561,18 +573,45 @@ function EditarInvitado({ ctx, guest: g, onCerrar }: { ctx: Ctx; guest: Guest; o
               <option value="modificado">Modificado</option>
             </select>
           </label>
+          <label className="block sm:col-span-2">
+            <span className="text-xs uppercase tracking-[0.15em] text-stone-500">Modalidad</span>
+            <select value={modalidadId} onChange={(e) => { setModalidadId(e.target.value); setAutorizarRecalculo(false); }} className={campo}>
+              <option value="">Sin clasificar (histórico)</option>
+              {ctx.modalidades.map((m) => <option key={m.id} value={m.id}>{m.nombre}</option>)}
+            </select>
+            {!modalidadId && <p className="mt-1 text-xs text-amber-800">Sin clasificar: se conserva el importe existente y no se envían correos.</p>}
+          </label>
           <label className="block">
             <span className="text-xs uppercase tracking-[0.15em] text-stone-500">Adultos</span>
-            <input value={adultos} onChange={(e) => setAdultos(e.target.value.replace(/[^0-9]/g, '').slice(0, 2))} inputMode="numeric" className={campo} />
+            <input value={adultos} readOnly className={campo} />
           </label>
           <label className="block">
             <span className="text-xs uppercase tracking-[0.15em] text-stone-500">Menores</span>
-            <input value={menores} onChange={(e) => setMenores(e.target.value.replace(/[^0-9]/g, '').slice(0, 2))} inputMode="numeric" className={campo} />
+            <input value={menores} readOnly className={campo} />
           </label>
-          <label className="block">
+          <div className="block">
             <span className="text-xs uppercase tracking-[0.15em] text-stone-500">Importe estimado (ARS)</span>
-            <input value={importe} onChange={(e) => setImporte(e.target.value.replace(/[^0-9]/g, '').slice(0, 9))} inputMode="numeric" className={campo} />
-          </label>
+            <p className={`${campo} bg-stone-100`}>{formatoARS(g.importe_estimado)}</p>
+          </div>
+          {modalidadCambiada && modalidad && (
+            <div className="sm:col-span-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+              <p>
+                Importe actual: <strong>{formatoARS(g.importe_estimado)}</strong>.{' '}
+                {calculo?.error
+                  ? `No se puede calcular: ${calculo.error}`
+                  : `Nuevo cálculo verificado: ${formatoARS(calculo?.importe ?? 0)} (${calculo?.personasQueAbonan ?? 0} persona(s) que abonan).`}
+              </p>
+              <label className="mt-2 flex items-start gap-2">
+                <input
+                  type="checkbox"
+                  checked={autorizarRecalculo}
+                  disabled={Boolean(calculo?.error)}
+                  onChange={(e) => setAutorizarRecalculo(e.target.checked)}
+                />
+                <span>Autorizo aplicar el nuevo cálculo. Si no lo marco, se conserva el importe histórico sin cambios.</span>
+              </label>
+            </div>
+          )}
           <label className="block">
             <span className="text-xs uppercase tracking-[0.15em] text-stone-500">Estado de pago</span>
             <select value={estadoPago} onChange={(e) => setEstadoPago(e.target.value)} className={campo}>
@@ -772,6 +811,10 @@ function DetalleInvitado({ ctx, guest: g, onCerrar, onAviso }: { ctx: Ctx; guest
         <button onClick={onCerrar} className="rounded-full border border-stone-300 px-3 py-1 text-xs">Cerrar</button>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
+        <Etiqueta tono="neutro">
+          Modalidad: {etiquetaModalidad(ctx, modalidadDe(g))}
+          {!modalidadDe(g) ? ' · requiere clasificación' : ''}
+        </Etiqueta>
         <Etiqueta tono={TONO_ASISTENCIA[g.asistencia] ?? 'neutro'}>Confirmación: {TEXTO_ASISTENCIA[g.asistencia] ?? g.asistencia}</Etiqueta>
         <Etiqueta tono={TONO_PAGO[g.estado_pago] ?? 'neutro'}>Pago: {TEXTO_PAGO[g.estado_pago] ?? g.estado_pago}</Etiqueta>
         <Etiqueta tono="neutro">Autorización: no disponible (requiere esquema)</Etiqueta>
@@ -1167,7 +1210,7 @@ export function Verificados({ ctx }: { ctx: Ctx }) {
         </>
       )}
       <h3 className="font-serifada mt-8 text-2xl text-[#183b2d]">Menores exentos ({m.exentosInvitados.length} registros · {m.exentos.length} personas)</h3>
-      <p className="text-xs text-stone-500">Menores de {ctx.ajustes.edad_minima_paga} años al día del evento. No generan deuda y no quedan bloqueados por falta de pago; su autorización sigue el mismo circuito explícito pendiente de esquema.</p>
+      <p className="text-xs text-stone-500">Menores de 10 años de la modalidad Familia y amigos no generan deuda; Compañeros no tiene exención por edad. La autorización sigue el mismo circuito explícito pendiente de esquema.</p>
       {m.exentosInvitados.length === 0 ? (
         <div className="mt-3"><Vacio texto="Sin menores exentos registrados." /></div>
       ) : (
@@ -2430,8 +2473,10 @@ export function Contenidos({ settings, sections, templates, versions, actor, rec
     delete patch.id;
     delete patch.created_at;
     delete patch.updated_at;
-    for (const k of ['precio_tarjeta', 'edad_minima_paga', 'recordatorio_cada_dias']) {
-      if (patch[k] !== undefined) patch[k] = Number(patch[k]);
+    delete patch.precio_tarjeta;
+    delete patch.edad_minima_paga;
+    if (patch.recordatorio_cada_dias !== undefined) {
+      patch.recordatorio_cada_dias = Number(patch.recordatorio_cada_dias);
     }
     if (typeof patch.recordatorios_activos === 'string') {
       patch.recordatorios_activos = patch.recordatorios_activos === 'true';
@@ -2459,6 +2504,8 @@ export function Contenidos({ settings, sections, templates, versions, actor, rec
     delete patch.id;
     delete patch.created_at;
     delete patch.updated_at;
+    delete patch.precio_tarjeta;
+    delete patch.edad_minima_paga;
     const { error: e2 } = await supabase.from('event_settings').update(patch).eq('id', settings.id as string);
     if (e2) {
       setMsg(`No se pudo restaurar: ${e2.message}`);
@@ -2474,8 +2521,7 @@ export function Contenidos({ settings, sections, templates, versions, actor, rec
     ['hora_inicio', 'Hora inicio'], ['hora_fin', 'Hora fin'], ['fecha_fin', 'Fecha fin'],
     ['zona_horaria', 'Zona horaria'], ['salon', 'Salón'], ['direccion', 'Dirección'],
     ['vestimenta', 'Vestimenta'], ['fecha_limite_confirmacion', 'Límite confirmación'],
-    ['fecha_limite_pago', 'Límite pago'], ['precio_tarjeta', 'Precio tarjeta'],
-    ['edad_minima_paga', 'Edad mínima que paga'], ['whatsapp_comprobantes', 'WhatsApp comprobantes'],
+    ['fecha_limite_pago', 'Límite pago'], ['whatsapp_comprobantes', 'WhatsApp comprobantes'],
     ['alias_transferencia', 'Alias'], ['titular_transferencia', 'Titular'],
     ['mensaje_final', 'Mensaje final'], ['recordatorio_cada_dias', 'Recordatorio cada (días)'],
   ];

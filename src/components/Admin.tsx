@@ -135,22 +135,6 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Catálogo de modalidades (lectura pública; tolera tabla ausente pre-0006).
-  useEffect(() => {
-    (async () => {
-      try {
-        const { data, error } = await supabase.from('modalidades').select('id,codigo,nombre');
-        if (!error && Array.isArray(data)) {
-          setModalidades(
-            (data as Array<{ id: string; codigo: string; nombre: string }>).filter((x) => x?.id && x?.codigo),
-          );
-        }
-      } catch {
-        /* sin modalidades: el filtro muestra "sin clasificar" */
-      }
-    })();
-  }, []);
-
   const verificarAdmin = async (em: string) => {
     const { data, error: perfilError } = await supabase
       .from('admin_profiles')
@@ -173,7 +157,7 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
 
   const recargar = async () => {
     setActualizando(true);
-    const [g, a, p, gr, m, s, sec, tpl, lg, au, vs, img] = await Promise.all([
+    const [g, a, p, gr, m, s, sec, tpl, lg, au, vs, img, mo] = await Promise.all([
       segura(supabase.from('guests').select('*').order('created_at', { ascending: false }).limit(2000)),
       segura(supabase.from('attendees').select('*').limit(5000)),
       segura(supabase.from('payment_records').select('*').order('created_at', { ascending: false }).limit(500)),
@@ -186,6 +170,7 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
       segura(supabase.from('audit_logs').select('*').order('created_at', { ascending: false }).limit(200)),
       segura(supabase.from('configuration_versions').select('id,nombre,descripcion,creado_por,created_at').order('created_at', { ascending: false }).limit(50)),
       segura(supabase.from('gallery_images').select('*').order('orden')),
+      segura(supabase.from('modalidades').select('id,codigo,nombre')),
     ]);
     const err: Record<string, string> = {};
     if (g.error) err.guests = g.error; else setGuests((g.data as Guest[]) ?? []);
@@ -200,6 +185,13 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
     if (au.error) err.audits = au.error; else setAudits((au.data as AuditRow[]) ?? []);
     if (vs.error) err.versions = vs.error; else setVersions((vs.data as R[]) ?? []);
     if (img.error) err.images = img.error; else setImages((img.data as R[]) ?? []);
+    if (mo.error) err.modalities = mo.error;
+    else {
+      setModalidades(
+        ((mo.data as Array<{ id: string; codigo: string; nombre: string }>) ?? [])
+          .filter((x) => x?.id && x?.codigo),
+      );
+    }
     setErrores(err);
     setActualizacion(new Date().toLocaleString('es-AR'));
     setActualizando(false);
@@ -244,7 +236,7 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
     window.scrollTo({ top: 0 });
   };
 
-  const copiarEnlace = async (codigo: 'familiares' | 'companeros') => {
+  const copiarEnlace = async (codigo: 'familia_amigos' | 'companeros') => {
     try {
       await navigator.clipboard.writeText(
         enlacePara(codigo, window.location.origin, window.location.pathname),
@@ -258,8 +250,6 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
 
   const ajustes: AjustesEvento | null = settings
     ? {
-        precio_tarjeta: Number(settings.precio_tarjeta ?? 0),
-        edad_minima_paga: Number(settings.edad_minima_paga ?? 10),
         fecha_limite_pago: String(settings.fecha_limite_pago ?? ''),
         recordatorio_cada_dias: Number(settings.recordatorio_cada_dias ?? 10),
         recordatorios_activos: Boolean(settings.recordatorios_activos ?? true),
@@ -269,7 +259,11 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
   // Vista por modalidad: un solo filtro global; dashboard, listados,
   // asistente e informes usan el mismo recorte (consistencia garantizada).
   const modId =
-    filtroMod === 'todas' ? null : (modalidades.find((x) => x.codigo === filtroMod)?.id ?? 'inexistente');
+    filtroMod === 'todas'
+      ? null
+      : filtroMod === 'sin_clasificar'
+        ? 'sin_clasificar'
+        : (modalidades.find((x) => x.codigo === filtroMod)?.id ?? 'inexistente');
   const fuente = useMemo(
     () => vistaModalidad(guests, attendees, payments, modId),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -279,10 +273,10 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
   const metrica = useMemo(
     () =>
       ajustes
-        ? calcularMetricas(fuente.guests, fuente.attendees, fuente.payments, groups, members, logs, ajustes)
+        ? calcularMetricas(fuente.guests, fuente.attendees, fuente.payments, groups, members, logs, ajustes, modalidades)
         : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [fuente, groups, members, logs, settings],
+    [fuente, groups, members, logs, settings, modalidades],
   );
 
   if (cargando) {
@@ -415,7 +409,7 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
               <p className="text-sm text-stone-500">{TITULOS[foco.tab].bajada}</p>
               {filtroMod !== 'todas' && (
                 <p className="mt-1 inline-block rounded-full bg-[#d6bd7a]/40 px-2 py-0.5 text-[11px] font-medium text-[#183b2d]">
-                  Vista: {modalidades.find((x) => x.codigo === filtroMod)?.nombre ?? filtroMod}
+                  Vista: {filtroMod === 'sin_clasificar' ? 'Sin clasificar' : modalidades.find((x) => x.codigo === filtroMod)?.nombre ?? filtroMod}
                   {modId === 'inexistente' ? ' (tabla de modalidades aún no disponible: sin registros)' : ''}
                 </p>
               )}
@@ -430,7 +424,8 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
                   className="rounded-full border border-stone-300 bg-white px-2 py-1.5 text-xs font-medium text-stone-700"
                 >
                   <option value="todas">Todas</option>
-                  <option value="familiares">Familiares y amigos</option>
+                  <option value="sin_clasificar">Sin clasificar</option>
+                  <option value="familia_amigos">Familia y amigos</option>
                   <option value="companeros">Compañeros</option>
                 </select>
               </label>
@@ -449,7 +444,7 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
           <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs" aria-label="Enlaces para invitados">
             <span className="font-medium text-stone-700">Enlaces:</span>
             <button
-              onClick={() => copiarEnlace('familiares')}
+              onClick={() => copiarEnlace('familia_amigos')}
               className="rounded-full border border-stone-300 px-3 py-1.5 font-medium text-stone-700 hover:bg-stone-100"
             >
               Copiar Familiares y amigos

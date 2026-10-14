@@ -1,6 +1,6 @@
 /* ============================================================
- * XV-ANTONELLA · Correos por Gmail + Apps Script (archivo local, sin desplegar)
- * Pegar este contenido en script.google.com > Proyecto > Editor.
+ * XV-ANTONELLA · LEGACY. Do not deploy; use CorreosXV-modalidades.gs after
+ * migration review. Kept for reference and fail-closed during transition.
  *
  * QUÉ HACE (2 pasadas, 1 trigger diario):
  *   revisionDiaria() → procesarBienvenidas() + procesarRecordatorios()
@@ -23,16 +23,9 @@
  * - DRY_RUN=true por defecto: solo registra, no envía ni escribe en DB.
  * - TEST_ONLY_EMAILS: con valor, SOLO esas direcciones reciben de verdad.
  *
- * INSTALACIÓN (usuario, ~20 min):
- *  1. script.google.com > Proyecto nuevo > pegar este archivo > Guardar.
- *  2. Engranaje > Configuración > Zona horaria: America/Argentina/Buenos_Aires.
- *  3. Engranaje > Propiedades del script > Añadir:
- *     SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, GMAIL_NOMBRE ("Antonella · Mis XV"),
- *     DRY_RUN=true, TEST_ONLY_EMAILS=(vacío), MAX_POR_EJECUCION=60.
- *  4. Ejecutar revisionDiaria() una vez a mano > Autorizar (cuenta Gmail del evento).
- *  5. Revisar Registros: debe decir DRY-RUN sin envíos ni escrituras.
- *  6. Desactivadores > Añadir activador: revisionDiaria, por tiempo, diaria 10:00.
- *  7. Para operar: DRY_RUN=false (+ TEST_ONLY_EMAILS con tu correo para probar).
+ * No copiar ni ejecutar este archivo. Para revisar el diseño actualizado,
+ * usar CorreosXV-modalidades.gs manteniendo DRY_RUN=true y
+ * ENVIAR_A_INVITADOS=false; no se habilita producción desde este repositorio.
  *
  * CUOTAS (docs oficiales, sujetas a cambio por Google):
  *  Gmail consumidor ~100 destinatarios/día; Workspace ~1500/día (rolling 24h).
@@ -49,6 +42,7 @@ function CFG() {
     SB_KEY: p.getProperty('SUPABASE_SERVICE_ROLE_KEY') || '',
     NOMBRE: p.getProperty('GMAIL_NOMBRE') || 'Antonella · Mis XV',
     DRY: (p.getProperty('DRY_RUN') || 'true') !== 'false',
+    ENVIAR: p.getProperty('ENVIAR_A_INVITADOS') === 'true',
     TEST: (p.getProperty('TEST_ONLY_EMAILS') || '')
       .split(',')
       .map(function (s) { return s.trim().toLowerCase(); })
@@ -106,11 +100,12 @@ function puedeEnviar(c) {
 
 /** Envío real o simulado. Devuelve 'enviado' | 'simulado' | 'omitido-test'. */
 function enviarSeguro(c, para, asunto, cuerpo) {
-  if (c.DRY) {
-    Logger.log('[DRY-RUN] Para: ' + para + ' | Asunto: ' + asunto);
+  if (c.DRY || !c.ENVIAR) {
+    Logger.log('[BLOQUEADO] DRY_RUN/ENVIAR_A_INVITADOS: ' + para);
     return 'simulado';
   }
-  if (c.TEST.length > 0 && c.TEST.indexOf(String(para).toLowerCase()) < 0) {
+  if (c.TEST.length === 0) throw new Error('Envío bloqueado: TEST_ONLY_EMAILS está vacío.');
+  if (c.TEST.indexOf(String(para).toLowerCase()) < 0) {
     Logger.log('[TEST] Omitido (fuera de lista): ' + para);
     return 'omitido-test';
   }
@@ -125,7 +120,36 @@ function plantillaPorClave(tpls, clave, defectoAsunto) {
   return { asunto: defectoAsunto, cuerpo: '' };
 }
 
+/**
+ * Inserta el aviso en email_logs. Carrera/duplicado (UNIQUE en
+ * idempotencia_clave) u otro fallo del POST -> null sin romper la pasada:
+ * un throw aquí mataba revisionDiaria entera (incluidos los recordatorios)
+ * y una fila 'pendiente' huérfana lo repetía cada día (fila venenosa).
+ */
+function registrarAviso(payload) {
+  try {
+    var ins = sb('email_logs', 'POST', payload);
+    var logId = (ins[0] && ins[0].id) || null;
+    if (!logId) Logger.log('Aviso no registrado (posible duplicado) para ' + payload.guest_id);
+    return logId;
+  } catch (e) {
+    Logger.log('Aviso no registrado (carrera/duplicado) para ' + payload.guest_id + ': ' + e);
+    return null;
+  }
+}
+
+/** Marca un aviso sin romper la pasada si el PATCH falla (red caída). */
+function marcarAviso(logId, patch, contexto) {
+  try {
+    sb('email_logs?id=eq.' + logId, 'PATCH', patch);
+  } catch (e) {
+    Logger.log('No se pudo marcar ' + contexto + ' (' + logId + '): ' + e);
+  }
+}
+
 function revisionDiaria() {
+  Logger.log('Script legado deshabilitado: no contiene validación por modalidad. Nada enviado ni escrito.');
+  return { ok: false, motivo: 'usar-CorreosXV-modalidades.gs' };
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(30000)) {
     Logger.log('Otra ejecución en curso; salgo sin duplicar.');
@@ -141,6 +165,8 @@ function revisionDiaria() {
 }
 
 function procesarBienvenidas() {
+  Logger.log('Bienvenidas bloqueadas en el script legado. Nada enviado ni escrito.');
+  return { enviados: 0, motivo: 'usar-CorreosXV-modalidades.gs' };
   var c = CFG();
   var enviados = 0;
   var omitidos = 0;
@@ -168,7 +194,7 @@ function procesarBienvenidas() {
       enviarSeguro(c, g.email, asunto, cuerpo);
       continue;
     }
-    var ins = sb('email_logs', 'POST', {
+    var logId = registrarAviso({
       guest_id: g.id,
       tipo: 'agradecimiento',
       destinatario: g.email,
@@ -176,23 +202,18 @@ function procesarBienvenidas() {
       estado: 'pendiente',
       idempotencia_clave: clave,
     });
-    var logId = (ins[0] && ins[0].id) || null;
-    if (!logId) {
-      // Carrera/duplicado: la UNIQUE protege; se reintentará mañana sin duplicar.
-      Logger.log('Aviso no registrado (posible duplicado) para ' + g.id);
-      continue;
-    }
+    if (!logId) continue;
     try {
       var estado = enviarSeguro(c, g.email, asunto, cuerpo);
       if (estado === 'enviado') {
-        sb('email_logs?id=eq.' + logId, 'PATCH', { estado: 'enviado', intentos: 1, enviado_at: new Date().toISOString() });
+        marcarAviso(logId, { estado: 'enviado', intentos: 1, enviado_at: new Date().toISOString() }, 'bienvenida de ' + g.email);
         enviados++;
       } else {
         sb('email_logs?id=eq.' + logId, 'DELETE', null);
         omitidos++;
       }
     } catch (e) {
-      sb('email_logs?id=eq.' + logId, 'PATCH', { estado: 'fallido', intentos: 1, error: String(e).slice(0, 500) });
+      marcarAviso(logId, { estado: 'fallido', intentos: 1, error: String(e).slice(0, 500) }, 'bienvenida de ' + g.email);
       Logger.log('Fallo envío a ' + g.email + ': ' + e);
     }
   }
@@ -200,6 +221,8 @@ function procesarBienvenidas() {
 }
 
 function procesarRecordatorios() {
+  Logger.log('Recordatorios bloqueados en el script legado. Nada enviado ni escrito.');
+  return { enviados: 0, motivo: 'usar-CorreosXV-modalidades.gs' };
   var c = CFG();
   var enviados = 0;
   var errores = 0;
@@ -243,7 +266,7 @@ function procesarRecordatorios() {
       enviarSeguro(c, g.email, asunto, cuerpo);
       continue;
     }
-    var ins = sb('email_logs', 'POST', {
+    var logId = registrarAviso({
       guest_id: g.id,
       tipo: 'recordatorio_pago',
       destinatario: g.email,
@@ -251,19 +274,18 @@ function procesarRecordatorios() {
       estado: 'pendiente',
       idempotencia_clave: clave,
     });
-    var logId = (ins[0] && ins[0].id) || null;
     if (!logId) continue; // ya existe hoy (idempotente) u otro: no reintentar en cadena
     try {
       var estado = enviarSeguro(c, g.email, asunto, cuerpo);
       if (estado === 'enviado') {
-        sb('email_logs?id=eq.' + logId, 'PATCH', { estado: 'enviado', intentos: 1, enviado_at: new Date().toISOString() });
+        marcarAviso(logId, { estado: 'enviado', intentos: 1, enviado_at: new Date().toISOString() }, 'recordatorio de ' + g.email);
         enviados++;
       } else {
         sb('email_logs?id=eq.' + logId, 'DELETE', null);
         Logger.log('Omitido por TEST_ONLY (sin marcar): ' + g.email);
       }
     } catch (e) {
-      sb('email_logs?id=eq.' + logId, 'PATCH', { estado: 'fallido', intentos: 1, error: String(e).slice(0, 500) });
+      marcarAviso(logId, { estado: 'fallido', intentos: 1, error: String(e).slice(0, 500) }, 'recordatorio de ' + g.email);
       errores++;
       Logger.log('Fallo envío a ' + g.email + ': ' + e);
     }

@@ -42,6 +42,7 @@ function FormB({ settings, mod, diseno, texto }: { settings: EventVM; mod: Modal
   const [email, setEmail] = useState('');
   const [telefono, setTelefono] = useState('');
   const [edad, setEdad] = useState('');
+  const [modalidadConfirmada, setModalidadConfirmada] = useState(false);
   const [asiste, setAsiste] = useState<'si' | 'no'>('si');
   /* Sin restricciones alimentarias en el formulario público (columna DB intacta). */
   const [error, setError] = useState<string | null>(null);
@@ -56,6 +57,10 @@ function FormB({ settings, mod, diseno, texto }: { settings: EventVM; mod: Modal
       setError(v);
       return;
     }
+    if (!modalidadConfirmada) {
+      setError('Confirmá que esta invitación corresponde a Compañeros.');
+      return;
+    }
     setEnviando(true);
     try {
       // ÚNICA vía válida para B: RPC validada en servidor. Sin fallback
@@ -65,9 +70,12 @@ function FormB({ settings, mod, diseno, texto }: { settings: EventVM; mod: Modal
           nombre, email, telefono, asiste: asiste === 'si', edadTitular: edad,
         }),
       });
-      const resp = data as { ok?: boolean; motivo?: string; importe?: number } | null;
+      const resp = data as { ok?: boolean; motivo?: string; guest_id?: string; importe?: number } | null;
       if (!error && resp?.ok) {
-        setExito({ importe: Number(resp.importe ?? importeB(asiste === 'si', mod.precio)) });
+        if (typeof resp.guest_id !== 'string' || resp.importe !== importeB(asiste === 'si')) {
+          throw new Error('El servidor respondió sin un importe/modalidad verificables. No se confirmó el registro.');
+        }
+        setExito({ importe: resp.importe });
         return;
       }
       if (!error && resp && !resp.ok) {
@@ -122,6 +130,18 @@ function FormB({ settings, mod, diseno, texto }: { settings: EventVM; mod: Modal
         {aplicarPlantilla(t('b_form_limite'), { Limite: formatearFechaLarga(mod.limite_confirmacion) })}
       </p>
       <form onSubmit={enviar} className="panel-lectura rounded-2xl p-5 text-left sm:p-8" noValidate>
+        <label className="mb-4 flex items-start gap-3 rounded-xl border border-[#d6bd7a]/40 p-4 text-sm text-[#f8f4e9]">
+          <input
+            type="checkbox"
+            checked={modalidadConfirmada}
+            onChange={(e) => setModalidadConfirmada(e.target.checked)}
+            className="mt-1 accent-[#d6bd7a]"
+          />
+          <span>
+            Confirmo modalidad <strong>Compañeros</strong>: 21:00 a 02:00, $40.000 por compañero,
+            sin acompañantes ni exención por edad.
+          </span>
+        </label>
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="block">
             <span className="text-xs uppercase tracking-[0.2em] text-[#a8b39a]">{t('b_form_nombre')}</span>
@@ -158,7 +178,7 @@ function FormB({ settings, mod, diseno, texto }: { settings: EventVM; mod: Modal
         {asiste === 'si' && (
           <>
             <div className="mt-4 rounded-xl border border-[#d6bd7a]/30 bg-[#183b2d]/70 p-4 text-center">
-              <p className="font-serifada text-3xl text-[#ecdcb0]">{formatoARS(importeB(true, mod.precio))}</p>
+              <p className="font-serifada text-3xl text-[#ecdcb0]">{formatoARS(importeB(true))}</p>
               <p className="text-xs text-[#a8b39a]">{aplicarPlantilla(t('b_form_precio_nota'), { LimitePago: formatearFechaLarga(mod.limite_pago) })}</p>
             </div>
           </>

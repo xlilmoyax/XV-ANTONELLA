@@ -9,7 +9,7 @@
  */
 
 export interface ModalidadConfig {
-  codigo: 'familiares' | 'companeros';
+  codigo: 'familia_amigos' | 'companeros';
   nombre: string;
   precio: number;
   hora_inicio: string;
@@ -59,6 +59,22 @@ export const MODALIDAD_B_ESTATICA: ModalidadConfig = {
   remoto: false,
 };
 
+export const MODALIDAD_A_ESTATICA: ModalidadConfig = {
+  codigo: 'familia_amigos',
+  nombre: 'Familia y amigos',
+  precio: 70000,
+  hora_inicio: '21:00',
+  hora_fin: '05:00',
+  fecha: '2026-12-19',
+  fecha_fin: '2026-12-20',
+  limite_confirmacion: '2026-11-25',
+  limite_pago: '2026-12-10',
+  vestimenta: 'Formal',
+  permite_acompanantes: true,
+  edad_minima: 10,
+  remoto: false,
+};
+
 export function aConfig(f: FilaModalidad): ModalidadConfig {
   return {
     codigo: f.codigo as ModalidadConfig['codigo'],
@@ -83,7 +99,7 @@ export async function cargarModalidad(
   supabase: {
     from: (t: string) => unknown;
   },
-  codigo: 'familiares' | 'companeros',
+  codigo: 'familia_amigos' | 'companeros',
 ): Promise<ModalidadConfig> {
   try {
     const tabla = supabase.from('modalidades') as {
@@ -101,7 +117,7 @@ export async function cargarModalidad(
     /* sin servidor: fallback documentado */
   }
   if (codigo === 'companeros') return { ...MODALIDAD_B_ESTATICA };
-  throw new Error('Sin configuración remota para familiares');
+  return { ...MODALIDAD_A_ESTATICA };
 }
 
 /**
@@ -109,7 +125,7 @@ export async function cargarModalidad(
  * El enlace NO autoriza nada; solo selecciona qué tarjeta mostrar.
  */
 export function enlacePara(
-  codigo: 'familiares' | 'companeros',
+  codigo: 'familia_amigos' | 'companeros',
   origen: string,
   ruta = '',
 ): string {
@@ -135,7 +151,10 @@ export function vistaModalidad<
   modalidadId: string | null,
 ): { guests: G[]; attendees: A[]; payments: P[] } {
   if (!modalidadId) return { guests, attendees, payments };
-  const g = guests.filter((x) => x.modalidad_id === modalidadId);
+  const g =
+    modalidadId === 'sin_clasificar'
+      ? guests.filter((x) => !x.modalidad_id)
+      : guests.filter((x) => x.modalidad_id === modalidadId);
   const ids = new Set(g.map((x) => x.id));
   return {
     guests: g,
