@@ -211,7 +211,7 @@ export default function RsvpForm({ settings, diseno }: { settings: EventVM; dise
         <div className="panel-lectura rounded-2xl p-8">
           <CheckCircle2 size={40} className="mx-auto text-[#d6bd7a]" aria-hidden="true" />
           <p className="font-serifada text-2xl text-[#ecdcb0] mt-4">
-            {asiste === 'si' ? '¡Te esperamos para una noche mágica!' : 'Gracias por avisarnos.'}
+            {asiste === 'si' ? '¡Te esperamos!' : 'Gracias por avisarnos.'}
           </p>
           {asiste === 'si' && (
             <div className="mt-4 space-y-1 text-[#f8f4e9]/90">
@@ -425,7 +425,7 @@ export default function RsvpForm({ settings, diseno }: { settings: EventVM; dise
               ) : (
                 <>
                   <p className="text-sm text-[#f8f4e9]/85">
-                    {calculo.total} persona(s) · {calculo.queAbonan} abonan · Menores de 10 años no abonan
+                    {calculo.total} persona(s) · {calculo.queAbonan} abonan · Menores de {settings.edad_minima_paga} no abonan
                   </p>
                   <p className="font-serifada text-3xl text-[#ecdcb0] mt-1">
                     {formatoARS(calculo.importe)}
