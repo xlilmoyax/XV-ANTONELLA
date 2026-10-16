@@ -204,7 +204,7 @@ export default function RsvpForm({ settings, diseno }: { settings: EventVM; dise
       const { data, error } = await supabase
         .from('modalidades')
         .select('id')
-        .eq('codigo', 'familiares')
+        .eq('codigo', 'familia_amigos')
         .maybeSingle();
       destino = decidirModalidad(
         error ? { code: error.code ?? undefined, message: error.message } : null,
