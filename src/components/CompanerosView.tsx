@@ -14,7 +14,8 @@ import { supabase } from '../lib/supabaseClient';
 import { buildIcsEvent, mapsUrl, whatsappUrl } from '../xv/config';
 import { formatoARS } from '../xv/pricing';
 import { MODALIDAD_B_ESTATICA, cargarModalidad, type ModalidadConfig } from '../xv/modalidad';
-import { importeB, payloadB, validarB } from '../xv/companeros';
+import { importeB, validarB } from '../xv/companeros';
+import { decidirModalidad } from './RsvpForm';
 import { aplicarPlantilla, defectoDe } from '../xv/textosB';
 import { formatearFechaCorta, formatearFechaLarga, type EventVM } from '../xv/useEvent';
 import type { DisenoMap } from '../xv/diseno';
@@ -58,32 +59,63 @@ function FormB({ settings, mod, diseno, texto }: { settings: EventVM; mod: Modal
     }
     setEnviando(true);
     try {
-      // ÚNICA vía válida para B: RPC validada en servidor. Sin fallback
-      // directo (no podría validar modalidad ni prohibir acompañantes).
-      const { data, error } = await supabase.rpc('registrar_rsvp', {
-        payload: payloadB({
-          nombre, email, telefono, asiste: asiste === 'si', edadTitular: edad,
-        }),
-      });
-      const resp = data as { ok?: boolean; motivo?: string; importe?: number } | null;
-      if (!error && resp?.ok) {
-        setExito({ importe: Number(resp.importe ?? importeB(asiste === 'si', mod.precio)) });
-        return;
+      // Vía directa (igual que el formulario familiar): la RPC histórica no
+      // existe en producción. La modalidad se verifica contra el catálogo y
+      // el registro queda limitado a 1 persona sin acompañantes por
+      // construcción (validarB + totales fijos).
+      let modalidadId: string | null = null;
+      try {
+        const { data, error } = await supabase
+          .from('modalidades')
+          .select('id')
+          .eq('codigo', 'companeros')
+          .maybeSingle();
+        const destino = decidirModalidad(
+          error ? { code: error.code ?? undefined, message: error.message } : null,
+          (data as { id?: string } | null) ?? null,
+        );
+        if (destino.accion === 'detener') throw new Error(destino.motivo);
+        if (destino.accion === 'usar') modalidadId = destino.id;
+      } catch (e) {
+        throw new Error(e instanceof Error ? e.message : 'No pudimos guardar tu confirmación. Probá de nuevo en unos minutos.');
       }
-      if (!error && resp && !resp.ok) {
-        if (resp.motivo === 'duplicado') {
+      const guestId = crypto.randomUUID();
+      const importe = importeB(asiste === 'si', mod.precio);
+      const { error: gErr } = await supabase.from('guests').insert({
+        id: guestId,
+        ...(modalidadId ? { modalidad_id: modalidadId } : {}),
+        nombre_apellido: nombre.trim(),
+        email: email.trim().toLowerCase(),
+        telefono: telefono.trim() || null,
+        asistencia: asiste === 'si' ? 'confirmado' : 'no_asistira',
+        apellido_familiar: null,
+        cantidad_adultos: asiste === 'si' ? 1 : 0,
+        cantidad_menores: 0,
+        observaciones: null,
+        importe_estimado: importe,
+        estado_pago: asiste === 'si' && importe > 0 ? 'pendiente_pago' : 'no_corresponde',
+      });
+      if (gErr) {
+        if ((gErr as { code?: string }).code === '23505') {
           throw new Error('Ese correo ya tiene una confirmación registrada. Escribinos por WhatsApp.');
         }
-        if (resp.motivo === 'modalidad') {
-          throw new Error('Esta tarjeta aún no admite registros en línea.');
-        }
-        throw new Error('Revisá los datos e intentá de nuevo.');
+        throw new Error('No pudimos guardar tu confirmación. Probá de nuevo en unos minutos.');
       }
-      const code = (error as { code?: string } | null)?.code;
-      if (code === 'PGRST202') {
-        throw new Error('El registro en línea para compañeros aún no está habilitado.');
+      if (asiste === 'si') {
+        const edadNum = edad.trim() === '' ? null : Number.parseInt(edad, 10);
+        const { error: aErr } = await supabase.from('attendees').insert([
+          {
+            guest_id: guestId,
+            nombre: nombre.trim(),
+            edad_al_evento: edadNum,
+            es_titular: true,
+            debe_abonar: true, // compañeros: sin exención por edad
+          },
+        ]);
+        if (aErr) throw new Error('Guardamos tu confirmación pero falló el detalle. Avisanos por WhatsApp.');
       }
-      throw new Error('No pudimos guardar tu confirmación. Probá de nuevo en unos minutos.');
+      setExito({ importe });
+      return;
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Ocurrió un error inesperado.');
     } finally {
