@@ -70,6 +70,25 @@ test('GAS charges one companion 40000 and rejects extra attendees', () => {
   assert.equal(context.calcularImporteValidado({ ...invitado, attendees: [...invitado.attendees, {}] }, 'companeros'), null);
 });
 
+test('GAS blocks email templates that would require an unsigned invitation link', () => {
+  assert.equal(context.plantillaPara([
+    {
+      clave: 'agradecimiento',
+      asunto: 'Gracias',
+      cuerpo: 'Abrí tu invitación: [Enlace]',
+      modalidad_id: 'mod-1',
+    },
+  ], 'agradecimiento', 'mod-1'), null);
+  assert.equal(context.plantillaPara([
+    {
+      clave: 'agradecimiento',
+      asunto: 'Gracias',
+      cuerpo: 'Gracias por confirmar.',
+      modalidad_id: 'mod-1',
+    },
+  ], 'agradecimiento', 'mod-1').cuerpo, 'Gracias por confirmar.');
+});
+
 test('GAS dry-run and disabled sending cannot send to a recipient', () => {
   const cfg = context.CFG();
   assert.equal(cfg.DRY, true);

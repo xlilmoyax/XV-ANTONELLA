@@ -1,10 +1,10 @@
-import { useMemo, useState, type FormEvent } from 'react';
+import { useMemo, useRef, useState, type FormEvent } from 'react';
 import type { DisenoMap } from '../xv/diseno';
 import { CheckCircle2, Minus, Plus, Send } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from '../lib/supabaseClient';
 import { whatsappUrl } from '../xv/config';
 import { calcularImporteModalidad, formatoARS } from '../xv/pricing';
-import { MODALIDAD_A_ESTATICA } from '../xv/modalidad';
+import type { ModalidadConfig } from '../xv/modalidad';
 import { formatearFechaLarga } from '../xv/useEvent';
 import type { EventVM } from '../xv/useEvent';
 import { Seccion } from './EventInfo';
@@ -16,7 +16,17 @@ interface Acompanante {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
-export default function RsvpForm({ settings, diseno }: { settings: EventVM; diseno: DisenoMap }) {
+export default function RsvpForm({
+  settings,
+  modalidad,
+  token,
+  diseno,
+}: {
+  settings: EventVM;
+  modalidad: ModalidadConfig;
+  token: string;
+  diseno: DisenoMap;
+}) {
   const [nombre, setNombre] = useState('');
   const [email, setEmail] = useState('');
   const [telefono, setTelefono] = useState('');
@@ -32,6 +42,7 @@ export default function RsvpForm({ settings, diseno }: { settings: EventVM; dise
   const [observaciones, setObservaciones] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
+  const envioEnCurso = useRef(false);
   const [exito, setExito] = useState<null | { importe: number; queAbonan: number; total: number }>(null);
 
   const vencida = useMemo(() => {
@@ -64,10 +75,12 @@ export default function RsvpForm({ settings, diseno }: { settings: EventVM; dise
     const ed = edades(acompanantes);
     const edadT = edadTitular.trim() === '' ? null : Number.parseInt(edadTitular, 10);
     const calculo = calcularImporteModalidad(
-      MODALIDAD_A_ESTATICA.codigo,
+      modalidad.codigo,
       [edadT !== null && Number.isFinite(edadT) ? edadT : null, ...ed],
       adultos,
       menores,
+      modalidad.precio,
+      modalidad.edad_minima,
     );
     return {
       queAbonan: calculo.personasQueAbonan,
@@ -75,7 +88,7 @@ export default function RsvpForm({ settings, diseno }: { settings: EventVM; dise
       total: adultos + menores,
       error: calculo.error,
     };
-  }, [acompanantes, edadTitular, asiste, adultos, menores]);
+  }, [acompanantes, edadTitular, asiste, adultos, menores, modalidad]);
 
   const validar = (): string | null => {
     if (nombre.trim().length < 3) return 'Contanos tu nombre y apellido.';
@@ -117,23 +130,10 @@ export default function RsvpForm({ settings, diseno }: { settings: EventVM; dise
     cantidades: 'Revisá las cantidades de adultos y menores.',
     detalle: 'Revisá el detalle de acompañantes (nombres y edades).',
     edad: 'Revisá las edades (en años, al día de la fiesta).',
-    duplicado:
-      'Ese correo ya tiene una confirmación registrada. Si necesitás modificarla, escribinos por WhatsApp.',
   };
-
-  /**
-   * Ausencia INEQUÍVOCA de la RPC (backend pre-0003): exige el código
-   * PostgREST de función inexistente Y que el mensaje nombre a la función.
-   * Un 404 genérico, un error de red/conexión, un 403 de permisos o un 500
-   * de ejecución NO activan el fallback: esos casos muestran error en vez
-   * de desviarse a otra vía (evita enmascarar outages y dobles registros).
-   */
-  const esFuncionAusente = (code?: string, message?: string) =>
-    code === 'PGRST202' && /registrar_rsvp/i.test(message ?? '');
 
   /** Payload exacto de registrar_rsvp: solo datos declarados, nada de estados. */
   const construirPayload = () => ({
-    modalidad: 'familia_amigos',
     nombre_apellido: nombre.trim(),
     email: email.trim().toLowerCase(),
     telefono: telefono.trim() || null,
@@ -148,6 +148,7 @@ export default function RsvpForm({ settings, diseno }: { settings: EventVM; dise
 
   const enviar = async (ev: FormEvent) => {
     ev.preventDefault();
+    if (envioEnCurso.current) return;
     setError(null);
     const v = validar();
     if (v) {
@@ -160,10 +161,11 @@ export default function RsvpForm({ settings, diseno }: { settings: EventVM; dise
       );
       return;
     }
+    envioEnCurso.current = true;
     setEnviando(true);
     try {
-      const { data, error } = await supabase.rpc('registrar_rsvp', {
-        payload: construirPayload(),
+      const { data, error } = await supabase.functions.invoke('registrar-rsvp', {
+        body: { token, payload: construirPayload() },
       });
       const resp = data as RpcResp | null;
 
@@ -172,7 +174,7 @@ export default function RsvpForm({ settings, diseno }: { settings: EventVM; dise
         // informa éxito aunque ok sea true (resultado ambiguo → error).
         if (
           typeof resp.guest_id !== 'string' ||
-          resp.modalidad !== MODALIDAD_A_ESTATICA.codigo ||
+          resp.modalidad !== modalidad.codigo ||
           typeof resp.importe !== 'number' ||
           typeof resp.que_abonan !== 'number' ||
           typeof resp.total !== 'number' ||
@@ -189,14 +191,11 @@ export default function RsvpForm({ settings, diseno }: { settings: EventVM; dise
         // La RPC respondió y rechazó los datos: NO se reintenta por otra vía.
         throw new Error(MOTIVOS[resp?.motivo ?? ''] ?? MENSAJE_GENERICO);
       }
-      throw new Error(
-        esFuncionAusente(error.code, error.message)
-          ? 'El registro seguro aún no está habilitado. Escribinos por WhatsApp.'
-          : MENSAJE_GENERICO,
-      );
+      throw new Error(MENSAJE_GENERICO);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Ocurrió un error inesperado.');
     } finally {
+      envioEnCurso.current = false;
       setEnviando(false);
     }
   };
@@ -254,8 +253,10 @@ export default function RsvpForm({ settings, diseno }: { settings: EventVM; dise
             className="mt-1 accent-[#d6bd7a]"
           />
           <span>
-            Confirmo que mi invitación es de <strong>Familia y amigos</strong>: de 21:00 a 05:00,
-            $70.000 por persona de 10 años o más; menores de 10 años exentos. Se permiten acompañantes.
+            Confirmo que esta invitación corresponde a <strong>{modalidad.nombre}</strong>: de {modalidad.hora_inicio} a {modalidad.hora_fin},
+            {formatoARS(modalidad.precio)} por persona que deba abonar.
+            {modalidad.edad_minima !== null && ` Menores de ${modalidad.edad_minima} años exentos.`}
+            {modalidad.permite_acompanantes ? ' Se permiten acompañantes.' : ' No se permiten acompañantes.'}
           </span>
         </label>
         <div className="grid sm:grid-cols-2 gap-4">

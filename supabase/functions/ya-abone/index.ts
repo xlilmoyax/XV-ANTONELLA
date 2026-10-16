@@ -6,8 +6,8 @@
 import { serve } from 'https://deno.land/std@0.208.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
-const SB_URL = Deno.env.get('SUPABASE_URL')!;
-const SB_SERVICE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+const SB_URL = Deno.env.get('SUPABASE_URL') ?? '';
+const SB_SERVICE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
 
 // CORS: el navegador invoca esta función (vista Ya Aboné).
 const CORS = {
@@ -20,41 +20,32 @@ const J = (cuerpo: unknown, estado = 200) => Response.json(cuerpo, { status: est
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
   try {
-    const { token } = await req.json();
-    if (!token || typeof token !== 'string') {
-      return J({ ok: false, motivo: 'token' }, 400);
+    if (req.method !== 'POST') return J({ ok: false }, 405);
+    const body = await req.json();
+    const token = body?.token;
+    if (typeof token !== 'string' || token.length < 32 || token.length > 256) return J({ ok: false }, 404);
+    if (!SB_URL || !SB_SERVICE) {
+      console.error('Payment notification service is not configured');
+      return J({ ok: false }, 500);
     }
     const sb = createClient(SB_URL, SB_SERVICE);
 
-    const { data: pago } = await sb
-      .from('payment_records')
-      .select('id,guest_id,estado')
-      .eq('token_accion', token)
-      .maybeSingle();
-    if (!pago) return J({ ok: false, motivo: 'token-invalido' }, 404);
-    if (pago.estado === 'pago_informado' || pago.estado === 'pago_verificado') {
-      return J({ ok: true, duplicado: true });
+    const { data, error } = await sb.rpc('registrar_aviso_pago', { p_token: token });
+    if (error) {
+      console.error('Payment notification database operation failed', error);
+      return J({ ok: false }, 500);
     }
-
-    await sb
-      .from('payment_records')
-      .update({ estado: 'pago_informado', informado_at: new Date().toISOString() })
-      .eq('id', pago.id);
-    await sb
-      .from('guests')
-      .update({ estado_pago: 'pago_informado', pago_informado_at: new Date().toISOString() })
-      .eq('id', pago.guest_id);
-    // Rastro auditable del aviso (quién/cuándo visible en Historial del panel).
-    await sb.from('audit_logs').insert({
-      actor_email: 'sistema:ya-abone',
-      entidad: 'payment_records',
-      registro_id: pago.id,
-      accion: 'pago_informado',
-      nuevos: { guest_id: pago.guest_id, informado_at: new Date().toISOString() },
-    });
-
-    return J({ ok: true });
+    const result = data as { ok?: boolean; duplicado?: boolean; whatsapp?: unknown } | null;
+    if (result?.ok) {
+      return J({
+        ok: true,
+        ...(result.duplicado ? { duplicado: true } : {}),
+        ...(typeof result.whatsapp === 'string' ? { whatsapp: result.whatsapp } : {}),
+      });
+    }
+    return J({ ok: false }, 404);
   } catch (e) {
-    return J({ ok: false, motivo: String(e).slice(0, 200) }, 500);
+    console.error('Payment notification request failed', e);
+    return J({ ok: false }, 500);
   }
 });

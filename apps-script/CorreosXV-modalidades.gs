@@ -15,9 +15,8 @@
  * - TEST_ONLY_EMAILS debe contener exactamente el email de prueba autorizado.
  * - email_logs registra modalidad_id (auditoría e idempotencia por tarjeta;
  *   la clave sigue siendo por guest_id: cada inscripción es una fila).
- * - Token [Enlace] por modalidad (origen: enlacePara() en src/xv/modalidad.ts:
- *   base + '/#invitacion' (A) o '/#companeros' (B)). Si la plantilla no trae
- *   [Enlace], no se agrega ningún enlace (nunca uno de otra modalidad).
+ * - Las plantillas que contienen [Enlace] se bloquean: este script no emite
+ *   invitaciones firmadas ni distribuye enlaces individuales.
  *
  * SEGURIDAD (igual que el vigente + lo anterior):
  * - Sin endpoint público (sin doGet/doPost). service_role solo en Propiedades.
@@ -41,7 +40,6 @@ function CFG() {
     SB_URL: p.getProperty('SUPABASE_URL') || '',
     SB_KEY: p.getProperty('SUPABASE_SERVICE_ROLE_KEY') || '',
     NOMBRE: p.getProperty('GMAIL_NOMBRE') || 'Antonella · Mis XV',
-    BASE: (p.getProperty('SITIO_BASE') || 'https://xv-antonella.vercel.app').replace(/\/$/, ''),
     DRY: (p.getProperty('DRY_RUN') || 'true') !== 'false',
     ENVIAR: p.getProperty('ENVIAR_A_INVITADOS') === 'true',
     TEST: (p.getProperty('TEST_ONLY_EMAILS') || '')
@@ -144,20 +142,16 @@ function recuperarAvisoFallido(logId, confirmacion, motivo) {
     'GET',
   );
   var tpl = plantillaPara(plantillas, baseTipo(previo.tipo === 'agradecimiento' ? 'agradecimiento' : 'recordatorio_pago'), previo.modalidad_id);
-  if (!tpl) throw new Error('No existe una plantilla no vacía para esa modalidad.');
+  if (!tpl) throw new Error('No existe una plantilla segura y no vacía para esa modalidad.');
   var importe = calcularImporteValidado(g, mod.codigo);
-  var base = CFG().BASE;
-  var enlace = enlaceModalidad(base, mod.codigo);
   var asunto = String(tpl.asunto)
     .split('[Nombre]').join(primerNombre(g.nombre_apellido))
     .split('[Importe]').join(formatearARS(importe))
-    .split('[Modalidad]').join(mod.codigo === 'companeros' ? 'Compañeros' : 'Familia y amigos')
-    .split('[Enlace]').join(enlace);
+    .split('[Modalidad]').join(mod.codigo === 'companeros' ? 'Compañeros' : 'Familia y amigos');
   var cuerpo = String(tpl.cuerpo)
     .split('[Nombre]').join(primerNombre(g.nombre_apellido))
     .split('[Importe]').join(formatearARS(importe))
-    .split('[Modalidad]').join(mod.codigo === 'companeros' ? 'Compañeros' : 'Familia y amigos')
-    .split('[Enlace]').join(enlace);
+    .split('[Modalidad]').join(mod.codigo === 'companeros' ? 'Compañeros' : 'Familia y amigos');
   var nuevo = sb('email_logs', 'POST', {
     guest_id: g.id,
     modalidad_id: g.modalidad_id,
@@ -238,12 +232,18 @@ function baseTipo(clave) {
 
 /**
  * Plantilla exacta para (tipo-base, modalidad): exige modalidad_id coincidente
- * y cuerpo no vacío. Sin correspondencia -> null (el llamador bloquea).
+ * y cuerpo no vacío, sin enlaces de invitación que este script no puede firmar.
+ * Sin correspondencia -> null (el llamador bloquea).
  */
 function plantillaPara(tpls, base, modId) {
   for (var i = 0; i < tpls.length; i++) {
     var t = tpls[i] || {};
-    if (baseTipo(t.clave) === base && t.modalidad_id === modId && String(t.cuerpo || '').trim() !== '') {
+    if (
+      baseTipo(t.clave) === base &&
+      t.modalidad_id === modId &&
+      String(t.cuerpo || '').trim() !== '' &&
+      !/\[Enlace\]/i.test(String(t.asunto || '') + '\n' + String(t.cuerpo || ''))
+    ) {
       return t;
     }
   }
@@ -284,11 +284,6 @@ function calcularImporteValidado(g, codigo) {
     return null;
   }
   return Number(g.importe_estimado) === esperado ? esperado : null;
-}
-
-/** Enlace de tarjeta por modalidad (puro; convención de enlacePara()). */
-function enlaceModalidad(base, codigo) {
-  return String(base).replace(/\/$/, '') + (codigo === 'companeros' ? '/#companeros' : '/#invitacion');
 }
 
 function puedeEnviar(c) {
@@ -374,14 +369,13 @@ function revisionDiaria() {
       var tb = plantillaPara(tpls, 'agradecimiento', modId);
       var tr = plantillaPara(tpls, 'recordatorio_pago', modId);
       if (!tb || !tr) {
-        resumen.bloqueados[cod] = 'plantilla-ausente';
-        Logger.log('[' + cod + '] Plantilla ausente o vacía: envíos de esta tarjeta bloqueados.');
+        resumen.bloqueados[cod] = 'plantilla-ausente-o-enlace-no-disponible';
+        Logger.log('[' + cod + '] Plantilla ausente/vacía o requiere un enlace firmado no disponible: envíos de esta tarjeta bloqueados.');
         continue;
       }
-      var enlace = enlaceModalidad(c.BASE, cod);
-      Logger.log('[' + cod + '] Plantillas: bienvenida=' + tb.clave + ' recordatorio=' + tr.clave + ' enlace=' + enlace);
-      resumen.bienvenidas[cod] = procesarBienvenidasMod(c, modId, cod, tb, enlace);
-      resumen.recordatorios[cod] = procesarRecordatoriosMod(c, modId, cod, tr, enlace);
+      Logger.log('[' + cod + '] Plantillas: bienvenida=' + tb.clave + ' recordatorio=' + tr.clave);
+      resumen.bienvenidas[cod] = procesarBienvenidasMod(c, modId, cod, tb);
+      resumen.recordatorios[cod] = procesarRecordatoriosMod(c, modId, cod, tr);
     }
     var sinMod = sb('guests?select=id&modalidad_id=is.null&limit=1', 'GET');
     resumen.bloqueados.sin_modalidad = Array.isArray(sinMod) && sinMod.length > 0;
@@ -438,7 +432,7 @@ function listaPruebaValida(c) {
     /^[^@\s,]+@[^@\s,]+\.[^@\s,]+$/.test(c.TEST[0]);
 }
 
-function procesarBienvenidasMod(c, modId, codigo, tpl, enlace) {
+function procesarBienvenidasMod(c, modId, codigo, tpl) {
   var enviados = 0;
   var omitidos = 0;
   var procesados = 0;
@@ -482,13 +476,11 @@ function procesarBienvenidasMod(c, modId, codigo, tpl, enlace) {
     var cuerpo = String(tpl.cuerpo)
       .split('[Nombre]').join(primerNombre(g.nombre_apellido))
       .split('[Importe]').join(formatearARS(importe))
-      .split('[Modalidad]').join(codigo === 'companeros' ? 'Compañeros' : 'Familia y amigos')
-      .split('[Enlace]').join(enlace);
+      .split('[Modalidad]').join(codigo === 'companeros' ? 'Compañeros' : 'Familia y amigos');
     var asunto = String(tpl.asunto)
       .split('[Nombre]').join(primerNombre(g.nombre_apellido))
       .split('[Importe]').join(formatearARS(importe))
-      .split('[Modalidad]').join(codigo === 'companeros' ? 'Compañeros' : 'Familia y amigos')
-      .split('[Enlace]').join(enlace);
+      .split('[Modalidad]').join(codigo === 'companeros' ? 'Compañeros' : 'Familia y amigos');
     var clave = 'agradecimiento:' + g.id;
     if (c.DRY || !c.ENVIAR) {
       enviarSeguro(c, g.email, tpl.asunto, cuerpo);
@@ -530,7 +522,7 @@ function procesarBienvenidasMod(c, modId, codigo, tpl, enlace) {
   return { enviados: enviados, omitidosTest: omitidos, inciertos: inciertos, revisados: procesados };
 }
 
-function procesarRecordatoriosMod(c, modId, codigo, tpl, enlace) {
+function procesarRecordatoriosMod(c, modId, codigo, tpl) {
   var enviados = 0;
   var errores = 0;
   var inciertos = 0;
@@ -577,13 +569,11 @@ function procesarRecordatoriosMod(c, modId, codigo, tpl, enlace) {
     var cuerpo = String(tpl.cuerpo)
       .split('[Nombre]').join(primerNombre(g.nombre_apellido))
       .split('[Importe]').join(formatearARS(importeValido))
-      .split('[Modalidad]').join(codigo === 'companeros' ? 'Compañeros' : 'Familia y amigos')
-      .split('[Enlace]').join(enlace);
+      .split('[Modalidad]').join(codigo === 'companeros' ? 'Compañeros' : 'Familia y amigos');
     var asunto = String(tpl.asunto)
       .split('[Nombre]').join(primerNombre(g.nombre_apellido))
       .split('[Importe]').join(formatearARS(importeValido))
-      .split('[Modalidad]').join(codigo === 'companeros' ? 'Compañeros' : 'Familia y amigos')
-      .split('[Enlace]').join(enlace);
+      .split('[Modalidad]').join(codigo === 'companeros' ? 'Compañeros' : 'Familia y amigos');
     var clave = 'recordatorio:' + g.id + ':' + hoy;
     if (c.DRY || !c.ENVIAR) {
       enviarSeguro(c, g.email, tpl.asunto, cuerpo);

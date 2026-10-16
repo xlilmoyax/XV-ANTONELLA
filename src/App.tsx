@@ -13,6 +13,7 @@ import { Cierre, Pie } from './components/Cierre';
 import { MarcoBotanico, Transicion } from './components/Decor';
 import MusicaFondo from './components/MusicaFondo';
 import { useEventSettings } from './xv/useEvent';
+import { DEFAULT_EVENT } from './xv/config';
 import type { Screen } from './xv/types';
 import { mapaDiseno, resolverFondo } from './xv/diseno';
 
@@ -21,37 +22,66 @@ import { mapaDiseno, resolverFondo } from './xv/diseno';
 const ALT_FIGURA =
   'Antonella de espaldas, con vestido verde de quince años, mirando hacia la luz del bosque encantado';
 
-function rutaActual(): { screen: Screen; token: string | null } {
+function rutaActual(tokenAnterior: string | null = null): { screen: Screen; token: string | null } {
   const h = window.location.hash || '#invitacion';
   if (h.startsWith('#ya-abone')) {
     const token = h.split('/')[1]?.trim() || null;
     return { screen: 'ya-abone', token };
   }
-  if (h.startsWith('#companeros')) return { screen: 'companeros', token: null };
-  if (h.startsWith('#confirmar')) return { screen: 'confirmar', token: null };
+  const tokenEnHash = h.startsWith('#invitacion/') || h.startsWith('#companeros/')
+    ? h.split('/')[1]?.split('?')[0] ?? null
+    : null;
+  const token = tokenEnHash || tokenAnterior;
+  if (h.startsWith('#companeros') || new URLSearchParams(window.location.search).get('view') === 'companeros') {
+    return { screen: 'companeros', token };
+  }
+  if (h.startsWith('#confirmar')) return { screen: 'confirmar', token };
   if (h.startsWith('#admin')) return { screen: 'admin', token: null };
-  return { screen: 'invitacion', token: null };
+  return { screen: 'invitacion', token };
 }
 
 export default function App() {
   const [{ screen, token }, setRuta] = useState(rutaActual);
-  const { settings, galeria, listo, texto, secciones } = useEventSettings();
-  // Mapa de diseño (una sola lectura de content_sections, sin fetches extra).
-  const diseno = useMemo(
-    () => mapaDiseno(Object.values(secciones).map((s) => ({ clave: s.clave, cuerpo: s.cuerpo, updated_at: s.updated_at }))),
-    [secciones],
-  );
-  const figura = resolverFondo(diseno, 'diseno_figura');
-
   useEffect(() => {
     const onHash = () => {
-      setRuta(rutaActual());
+      setRuta((previous) => rutaActual(previous.token));
       window.scrollTo({ top: 0 });
     };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
 
+  if (screen === 'admin') {
+    return (
+      <div className="bosque-fondo min-h-screen">
+        <Admin onSalir={() => (window.location.hash = '#invitacion')} />
+        <Pie settings={DEFAULT_EVENT} />
+      </div>
+    );
+  }
+
+  if (screen === 'ya-abone') {
+    return (
+      <div className="bosque-fondo min-h-screen">
+        <YaAbone settings={DEFAULT_EVENT} token={token} />
+        <Pie settings={DEFAULT_EVENT} />
+      </div>
+    );
+  }
+
+  return <InvitacionAutorizada key={`${screen}:${token ?? ''}`} screen={screen} token={token} />;
+}
+
+function InvitacionAutorizada({ screen, token }: { screen: Screen; token: string | null }) {
+  const { settings, galeria, listo, texto, secciones, modalidad, autorizada } = useEventSettings(
+    token,
+    screen === 'companeros' ? 'companeros' : 'familia_amigos',
+  );
+  const diseno = useMemo(
+    () => mapaDiseno(Object.values(secciones).map((s) => ({ clave: s.clave, cuerpo: s.cuerpo, updated_at: s.updated_at }))),
+    [secciones],
+  );
+  const figura = resolverFondo(diseno, 'diseno_figura');
   const descubrir = useCallback(() => {
     document.getElementById('presentacion')?.scrollIntoView({ behavior: 'smooth' });
   }, []);
@@ -64,11 +94,12 @@ export default function App() {
     );
   }
 
-  if (screen === 'admin') {
+  if (!autorizada || !modalidad) {
     return (
-      <div className="bosque-fondo min-h-screen">
-        <Admin onSalir={() => (window.location.hash = '#invitacion')} />
-        <Pie settings={settings} />
+      <div className="bosque-fondo flex min-h-screen items-center justify-center px-6">
+        <p className="font-serifada text-center text-2xl text-[#ecdcb0]">
+          Esta invitación no está disponible.
+        </p>
       </div>
     );
   }
@@ -77,6 +108,8 @@ export default function App() {
     return (
       <CompanerosView
         settings={settings}
+        modalidad={modalidad!}
+        token={token!}
         diseno={diseno}
         texto={texto}
       />
@@ -86,16 +119,7 @@ export default function App() {
   if (screen === 'confirmar') {
     return (
       <div className="bosque-fondo min-h-screen">
-        <RsvpForm settings={settings} diseno={diseno} />
-        <Pie settings={settings} />
-      </div>
-    );
-  }
-
-  if (screen === 'ya-abone') {
-    return (
-      <div className="bosque-fondo min-h-screen">
-        <YaAbone settings={settings} token={token} />
+        <RsvpForm settings={settings} modalidad={modalidad!} token={token!} diseno={diseno} />
         <Pie settings={settings} />
       </div>
     );
@@ -177,7 +201,7 @@ export default function App() {
             '“¡Ayudame sugiriendo las canciones que pensás que no pueden faltar en la fiesta!”',
           )}
         />
-        <RsvpForm settings={settings} diseno={diseno} />
+        <RsvpForm settings={settings} modalidad={modalidad!} token={token!} diseno={diseno} />
         <Cierre settings={settings} diseno={diseno} />
         <MusicaFondo />
       </main>

@@ -26,8 +26,8 @@ const { calcularMetricas } = await compiledModule('src/xv/metricas.ts', {
 
 const ajustes = { fecha_limite_pago: '', recordatorio_cada_dias: 10, recordatorios_activos: true };
 const modalidades = [
-  { id: 'familia-id', codigo: 'familia_amigos' },
-  { id: 'companeros-id', codigo: 'companeros' },
+  { id: 'familia-id', codigo: 'familia_amigos', precio_tarjeta: 70000, edad_minima_paga: 10 },
+  { id: 'companeros-id', codigo: 'companeros', precio_tarjeta: 40000, edad_minima_paga: null },
 ];
 const guest = (id, modalidadId, adultos, menores, importe) => ({
   id,

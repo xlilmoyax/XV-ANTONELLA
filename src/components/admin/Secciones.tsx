@@ -100,7 +100,13 @@ export interface Ctx {
   ir: (tab: SeccionId, preset?: { q?: string; fAsist?: string; fPago?: string }) => void;
   actualizacion: string;
   erroresCarga: Record<string, string>;
-  modalidades: Array<{ id: string; codigo: string; nombre: string }>;
+  modalidades: Array<{
+    id: string;
+    codigo: string;
+    nombre: string;
+    precio_tarjeta: number;
+    edad_minima_paga: number | null;
+  }>;
   vistaModalidad: string;
 }
 
@@ -462,6 +468,8 @@ function EditarInvitado({ ctx, guest: g, onCerrar }: { ctx: Ctx; guest: Guest; o
         asistentes.map((a) => a.edad_al_evento),
         adultos,
         menores,
+        modalidad.precio_tarjeta,
+        modalidad.edad_minima_paga,
       )
     : null;
   const modalidadCambiada = modalidadId !== (g.modalidad_id ?? '');

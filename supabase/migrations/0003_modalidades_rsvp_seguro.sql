@@ -30,6 +30,23 @@ create table modalidades (
   )
 );
 
+revoke create on schema public from public, anon, authenticated;
+grant usage on schema public to anon, authenticated, service_role;
+
+-- Harden the shared admin predicate against public/temp object shadowing.
+create or replace function public.xv_es_admin()
+returns boolean
+language sql
+stable
+security definer
+set search_path = pg_catalog, pg_temp
+as $$
+  select exists (
+    select 1 from public.admin_profiles
+    where user_id = auth.uid() and activo = true
+  );
+$$;
+
 insert into modalidades (
   codigo, nombre, precio_tarjeta, hora_inicio, hora_fin, fecha_fin,
   fecha_limite_confirmacion, fecha_limite_pago, permite_acompanantes,
@@ -52,12 +69,42 @@ alter table email_logs
   add column modalidad_id uuid references modalidades(id);
 create index email_logs_modalidad_idx on email_logs (modalidad_id);
 
+create table invitaciones (
+  id uuid primary key default gen_random_uuid(),
+  modalidad_id uuid not null references modalidades(id),
+  created_by uuid not null references auth.users(id),
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null,
+  used_at timestamptz,
+  guest_id uuid references guests(id) on delete set null
+);
+create index invitaciones_modalidad_idx on invitaciones (modalidad_id);
+alter table invitaciones enable row level security;
+revoke all on table invitaciones from public, anon, authenticated;
+grant select, insert, update on table invitaciones to service_role;
+
 alter table modalidades enable row level security;
-create policy mod_read on modalidades for select using (true);
+drop policy if exists mod_read on modalidades;
 create policy mod_admin on modalidades
   for all using (xv_es_admin()) with check (xv_es_admin());
-revoke insert, update, delete on modalidades from anon, authenticated;
-grant select on modalidades to anon, authenticated;
+revoke all on table modalidades from public, anon, authenticated;
+grant select on modalidades to authenticated, service_role;
+
+-- Public configuration is delivered only by an invitation-authorized Edge Function.
+drop policy if exists ev_read on event_settings;
+drop policy if exists cs_read on content_sections;
+drop policy if exists gal_read on gallery_images;
+revoke all on table event_settings, content_sections, gallery_images from public, anon;
+grant select, insert, update, delete on table event_settings, content_sections,
+  gallery_images to authenticated, service_role;
+
+-- These tables are private even if a broad project-level default grant exists.
+revoke all on table guests, attendees, payment_records, guest_groups, group_members,
+  email_templates, email_logs, admin_profiles, audit_logs, configuration_versions
+  from public, anon;
+grant select, insert, update, delete on table guests, attendees, payment_records,
+  guest_groups, group_members, email_templates, email_logs, admin_profiles,
+  audit_logs, configuration_versions to authenticated, service_role;
 
 create trigger t_modalidades before update on modalidades
   for each row execute function xv_touch_updated_at();
@@ -67,18 +114,21 @@ create trigger t_modalidades before update on modalidades
 drop policy if exists g_insert on guests;
 drop policy if exists a_insert on attendees;
 
-create or replace function registrar_rsvp(payload jsonb)
+drop function if exists registrar_rsvp(jsonb);
+
+create or replace function registrar_rsvp(p_invitation_id uuid, payload jsonb)
 returns jsonb
 language plpgsql
 security definer
-set search_path = public, pg_temp
+set search_path = pg_catalog, pg_temp
 as $$
 declare
-  v_codigo text := payload ->> 'modalidad';
+  v_codigo text;
   v_modalidad_id uuid;
   v_precio integer;
   v_edad_minima integer;
   v_permite_acompanantes boolean;
+  v_expires_at timestamptz;
   v_nombre text := nullif(btrim(payload ->> 'nombre_apellido'), '');
   v_email text := lower(nullif(btrim(payload ->> 'email'), ''));
   v_telefono text := nullif(btrim(payload ->> 'telefono'), '');
@@ -99,17 +149,20 @@ declare
   v_edad_persona integer;
   v_edad_persona_texto text;
 begin
-  if jsonb_typeof(payload) <> 'object'
-     or v_codigo not in ('familia_amigos', 'companeros') then
-    return jsonb_build_object('ok', false, 'motivo', 'modalidad');
+  if jsonb_typeof(payload) <> 'object' or p_invitation_id is null then
+    return jsonb_build_object('ok', false, 'motivo', 'invitacion');
   end if;
 
-  select id, precio_tarjeta, edad_minima_paga, permite_acompanantes
-    into v_modalidad_id, v_precio, v_edad_minima, v_permite_acompanantes
-  from modalidades
-  where codigo = v_codigo and activa;
-  if v_modalidad_id is null then
-    return jsonb_build_object('ok', false, 'motivo', 'modalidad');
+  select i.modalidad_id, m.codigo, m.precio_tarjeta, m.edad_minima_paga,
+         m.permite_acompanantes, i.expires_at
+    into v_modalidad_id, v_codigo, v_precio, v_edad_minima,
+         v_permite_acompanantes, v_expires_at
+  from public.invitaciones i
+  join public.modalidades m on m.id = i.modalidad_id and m.activa
+  where i.id = p_invitation_id and i.used_at is null
+  for update of i;
+  if v_modalidad_id is null or v_expires_at <= now() then
+    return jsonb_build_object('ok', false, 'motivo', 'invitacion');
   end if;
 
   begin
@@ -201,7 +254,7 @@ begin
   v_importe := v_personas_que_abonan * v_precio;
 
   begin
-    insert into guests (
+    insert into public.guests (
       id, modalidad_id, nombre_apellido, email, telefono, asistencia,
       apellido_familiar, cantidad_adultos, cantidad_menores,
       observaciones, importe_estimado, estado_pago
@@ -213,7 +266,7 @@ begin
     );
 
     if v_asiste then
-      insert into attendees (guest_id, nombre, edad_al_evento, es_titular, debe_abonar)
+      insert into public.attendees (guest_id, nombre, edad_al_evento, es_titular, debe_abonar)
       values (
         v_guest_id, v_nombre, v_edad_titular, true,
         case when v_codigo = 'companeros' then true
@@ -225,7 +278,7 @@ begin
         v_edad_persona_texto := nullif(btrim(v_persona ->> 'edad'), '');
         v_edad_persona := case when v_edad_persona_texto is null
           then null else v_edad_persona_texto::integer end;
-        insert into attendees (guest_id, nombre, edad_al_evento, es_titular, debe_abonar)
+        insert into public.attendees (guest_id, nombre, edad_al_evento, es_titular, debe_abonar)
         values (
           v_guest_id, v_nombre_persona, v_edad_persona, false,
           case when v_codigo = 'companeros' then true
@@ -233,19 +286,84 @@ begin
         );
       end loop;
     end if;
+
+    update public.invitaciones
+    set used_at = now(), guest_id = v_guest_id
+    where id = p_invitation_id and used_at is null;
+    if not found then
+      return jsonb_build_object('ok', false, 'motivo', 'invitacion');
+    end if;
   exception when unique_violation then
     return jsonb_build_object('ok', false, 'motivo', 'duplicado');
   end;
 
   return jsonb_build_object(
-    'ok', true, 'guest_id', v_guest_id, 'modalidad', v_codigo,
-    'importe', v_importe, 'que_abonan', v_personas_que_abonan, 'total', v_total
+    'ok', true, 'guest_id', v_guest_id,
+    'modalidad', v_codigo, 'importe', v_importe,
+    'que_abonan', v_personas_que_abonan, 'total', v_total
   );
 end;
 $$;
 
-revoke all on function registrar_rsvp(jsonb) from public, anon, authenticated;
-grant execute on function registrar_rsvp(jsonb) to anon, authenticated;
+revoke all on function registrar_rsvp(uuid, jsonb) from public, anon, authenticated;
+grant execute on function registrar_rsvp(uuid, jsonb) to service_role;
+
+create or replace function registrar_aviso_pago(p_token text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = pg_catalog, pg_temp
+as $$
+declare
+  v_pago_id uuid;
+  v_guest_id uuid;
+  v_estado text;
+  v_whatsapp text;
+  v_informado_at timestamptz := now();
+begin
+  if p_token is null or char_length(p_token) < 32 then
+    return jsonb_build_object('ok', false);
+  end if;
+
+  select p.id, p.guest_id, p.estado
+    into v_pago_id, v_guest_id, v_estado
+  from public.payment_records p
+  where p.token_accion = p_token
+  for update;
+
+  if v_pago_id is null then
+    return jsonb_build_object('ok', false);
+  end if;
+
+  select e.whatsapp_comprobantes into v_whatsapp
+  from public.event_settings e
+  limit 1;
+
+  if v_estado in ('pago_informado', 'pago_verificado') then
+    return jsonb_build_object('ok', true, 'duplicado', true, 'whatsapp', v_whatsapp);
+  end if;
+
+  update public.payment_records
+  set estado = 'pago_informado', informado_at = v_informado_at
+  where id = v_pago_id;
+  update public.guests
+  set estado_pago = 'pago_informado', pago_informado_at = v_informado_at
+  where id = v_guest_id;
+
+  insert into public.audit_logs (
+    actor_email, entidad, registro_id, accion, nuevos
+  ) values (
+    'sistema:ya-abone', 'payment_records', v_pago_id::text,
+    'pago_informado',
+    jsonb_build_object('guest_id', v_guest_id, 'informado_at', v_informado_at)
+  );
+
+  return jsonb_build_object('ok', true, 'whatsapp', v_whatsapp);
+end;
+$$;
+
+revoke all on function registrar_aviso_pago(text) from public, anon, authenticated;
+grant execute on function registrar_aviso_pago(text) to service_role;
 
 comment on column guests.modalidad_id is
   'NULL hasta clasificación manual; no inferir modalidad de importes o datos personales.';

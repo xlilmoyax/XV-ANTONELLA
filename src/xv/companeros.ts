@@ -27,18 +27,16 @@ export function validarB(d: DatosB): string | null {
 }
 
 /** Importe individual: precio vigente o 0 si no asiste. */
-export function importeB(asiste: boolean): number {
-  return asiste ? calcularImporteModalidad('companeros', [null], 1, 0).importe : 0;
+export function importeB(asiste: boolean, precioTarjeta: number): number {
+  return asiste ? calcularImporteModalidad('companeros', [null], 1, 0, precioTarjeta, null).importe : 0;
 }
 
 /**
- * Payload exacto para registrar_rsvp. Sin acompañantes por construcción
- * (array vacío + totales fijos): aunque se manipule el navegador, la RPC
- * valida modalidad + total = 1 en el servidor.
+ * Payload para el endpoint RSVP. El servidor obtiene la modalidad
+ * exclusivamente desde la invitación firmada.
  */
 export function payloadB(d: DatosB) {
   return {
-    modalidad: 'companeros',
     nombre_apellido: d.nombre.trim(),
     email: d.email.trim().toLowerCase(),
     telefono: d.telefono.trim() || null,

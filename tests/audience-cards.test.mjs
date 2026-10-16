@@ -26,6 +26,30 @@ const settings = {
   titular_transferencia: 'Titular',
   mensaje_final: '',
 };
+const familia = {
+  codigo: 'familia_amigos',
+  nombre: 'Familia y amigos',
+  precio: 70000,
+  hora_inicio: '21:00',
+  hora_fin: '05:00',
+  fecha: '2026-12-19',
+  fecha_fin: '2026-12-20',
+  limite_confirmacion: '2026-11-25',
+  limite_pago: '2026-12-10',
+  vestimenta: 'Formal',
+  permite_acompanantes: true,
+  edad_minima: 10,
+  remoto: true,
+};
+const companeros = {
+  ...familia,
+  codigo: 'companeros',
+  nombre: 'Compañeros',
+  precio: 40000,
+  hora_fin: '02:00',
+  permite_acompanantes: false,
+  edad_minima: null,
+};
 
 let vite;
 let Pagos;
@@ -68,7 +92,7 @@ test('Family payment card restores original wording and renders only its own pri
 });
 
 test('Family RSVP and payment summary render no companions price', () => {
-  const html = render(React.createElement(FormularioA, { settings, diseno: {} }));
+  const html = render(React.createElement(FormularioA, { settings, modalidad: familia, token: 'family-token', diseno: {} }));
 
   assert.match(html, /Familia y amigos/u);
   assert.match(html, precioA);
@@ -82,6 +106,8 @@ test('Companions card, payment, and RSVP render only the companions price and co
   const html = render(
     React.createElement(TarjetaB, {
       settings,
+      modalidad: companeros,
+      token: 'companions-token',
       diseno: {},
       texto: (_clave, respaldo) => respaldo,
     }),
@@ -111,6 +137,7 @@ test('original copy and pricing rules remain explicit and modality-specific', as
   assert.match(companionTextSource, /MIS XV AÑOS · COMPAÑEROS/u);
   assert.match(companionTextSource, /Tarjeta individual: \[Precio\] por invitado\./u);
   assert.doesNotMatch(companionTextSource, /70[.,]000/u);
-  assert.match(pricingSource, /if \(modalidad === 'companeros'\)[\s\S]*?40000/u);
-  assert.match(pricingSource, /personasQueAbonan[\s\S]*?70000/u);
+  assert.match(pricingSource, /precioTarjeta: number/u);
+  assert.match(pricingSource, /edadMinimaPaga: number \| null/u);
+  assert.doesNotMatch(pricingSource, /40000|70000/u);
 });

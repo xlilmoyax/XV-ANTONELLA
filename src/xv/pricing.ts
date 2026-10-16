@@ -36,6 +36,8 @@ export function calcularImporteModalidad(
   edades: Array<number | null>,
   adultos: number,
   menores: number,
+  precioTarjeta: number,
+  edadMinimaPaga: number | null,
 ): CalculoModalidad {
   if (modalidad !== 'familia_amigos' && modalidad !== 'companeros') {
     return { importe: 0, personasQueAbonan: 0, error: 'Modalidad sin clasificar o desconocida.' };
@@ -49,17 +51,23 @@ export function calcularImporteModalidad(
   ) {
     return { importe: 0, personasQueAbonan: 0, error: 'Las cantidades no coinciden con las personas registradas.' };
   }
+  if (!Number.isInteger(precioTarjeta) || precioTarjeta <= 0) {
+    return { importe: 0, personasQueAbonan: 0, error: 'La configuración del importe no es válida.' };
+  }
   if (modalidad === 'companeros') {
     if (edades.length !== 1) {
       return { importe: 0, personasQueAbonan: 0, error: 'Compañeros admite una sola persona y ningún acompañante.' };
     }
-    return { importe: importeEstimado(1, 40000), personasQueAbonan: 1, error: null };
+    return { importe: importeEstimado(1, precioTarjeta), personasQueAbonan: 1, error: null };
+  }
+  if (!Number.isInteger(edadMinimaPaga) || edadMinimaPaga === null || edadMinimaPaga < 0) {
+    return { importe: 0, personasQueAbonan: 0, error: 'La regla de edad no es válida.' };
   }
   if (edades.some((edad) => edad === null || !Number.isInteger(edad) || edad < 0 || edad > 120)) {
     return { importe: 0, personasQueAbonan: 0, error: 'Falta una edad necesaria para validar la exención familiar.' };
   }
-  const personasQueAbonan = edades.filter((edad) => debeAbonar(edad, 10)).length;
-  return { importe: importeEstimado(personasQueAbonan, 70000), personasQueAbonan, error: null };
+  const personasQueAbonan = edades.filter((edad) => debeAbonar(edad, edadMinimaPaga)).length;
+  return { importe: importeEstimado(personasQueAbonan, precioTarjeta), personasQueAbonan, error: null };
 }
 
 export function formatoARS(monto: number): string {

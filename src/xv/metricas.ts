@@ -184,9 +184,15 @@ export function calcularMetricas(
   miembros: MiembroRow[],
   logs: EmailLogRow[],
   aj: AjustesEvento,
-  modalidades: Array<{ id: string; codigo: string }> = [],
+  modalidades: Array<{
+    id: string;
+    codigo: string;
+    precio_tarjeta: number;
+    edad_minima_paga: number | null;
+  }> = [],
 ): Metricas {
   const porGuest = porId(guests);
+  const modalidadPorId = new Map(modalidades.map((m) => [m.id, m]));
   const codigoPorModalidad = new Map(modalidades.map((m) => [m.id, m.codigo]));
   const attendeesPorGuest = new Map<string, Attendee[]>();
   for (const attendee of attendees) {
@@ -201,8 +207,8 @@ export function calcularMetricas(
   const modalidadValida = new Set<string>();
   const modalidadIncoherente: Inconsistencia[] = [];
   for (const g of confirmados) {
-    const codigo = g.modalidad_id ? codigoPorModalidad.get(g.modalidad_id) ?? null : null;
-    if (!codigo) {
+    const modalidad = g.modalidad_id ? modalidadPorId.get(g.modalidad_id) ?? null : null;
+    if (!modalidad) {
       modalidadIncoherente.push({
         tipo: 'modalidad',
         detalle: `${g.nombre_apellido}: falta una modalidad validada; importe histórico conservado.`,
@@ -212,10 +218,12 @@ export function calcularMetricas(
     }
     const filas = attendeesPorGuest.get(g.id) ?? [];
     const calculo = calcularImporteModalidad(
-      codigo,
+      modalidad.codigo,
       filas.map((a) => a.edad_al_evento),
       g.cantidad_adultos,
       g.cantidad_menores,
+      modalidad.precio_tarjeta,
+      modalidad.edad_minima_paga,
     );
     calculos.set(g.id, calculo);
     if (calculo.error || calculo.importe !== g.importe_estimado) {

@@ -1,19 +1,14 @@
 /**
- * XV-ANTONELLA · Tarjeta Compañeros (NO publicada: ruta local sin enlaces).
- * Registro individual, sin acompañantes. Precio/horarios desde configuración
- * validada (tabla modalidades o fallback estático aprobado).
- * Fondos: reutiliza transitoriamente fotos A (jardín/sendero) hasta recibir
- * el arte propio B; sustituir por claves diseno_b_* en la etapa visual.
- * Textos: editables desde el panel (Tarjetas → Compañeros, claves b_* del
- * catálogo src/xv/textosB.ts); sin fila en DB se usan los valores originales.
+ * Tarjeta autorizada por invitación firmada. La configuración se recibe del
+ * endpoint asociado al token; no se consulta el catálogo desde el navegador.
  */
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { CalendarPlus, ChevronDown, Clock, MapPin, MessageCircle, Send, Shirt } from 'lucide-react';
 import { supabase } from '../lib/supabaseClient';
 import { buildIcsEvent, mapsUrl, whatsappUrl } from '../xv/config';
 import { formatoARS } from '../xv/pricing';
-import { MODALIDAD_B_ESTATICA, cargarModalidad, type ModalidadConfig } from '../xv/modalidad';
+import type { ModalidadConfig } from '../xv/modalidad';
 import { importeB, payloadB, validarB } from '../xv/companeros';
 import { aplicarPlantilla, defectoDe } from '../xv/textosB';
 import { formatearFechaCorta, formatearFechaLarga, type EventVM } from '../xv/useEvent';
@@ -36,7 +31,19 @@ function InfoRow({ icono, texto }: { icono: ReactNode; texto: string }) {
   );
 }
 
-function FormB({ settings, mod, diseno, texto }: { settings: EventVM; mod: ModalidadConfig; diseno: DisenoMap; texto: TextoFn }) {
+function FormB({
+  settings,
+  mod,
+  token,
+  diseno,
+  texto,
+}: {
+  settings: EventVM;
+  mod: ModalidadConfig;
+  token: string;
+  diseno: DisenoMap;
+  texto: TextoFn;
+}) {
   const t = (clave: string) => texto(clave, defectoDe(clave));
   const [nombre, setNombre] = useState('');
   const [email, setEmail] = useState('');
@@ -47,10 +54,12 @@ function FormB({ settings, mod, diseno, texto }: { settings: EventVM; mod: Modal
   /* Sin restricciones alimentarias en el formulario público (columna DB intacta). */
   const [error, setError] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
+  const envioEnCurso = useRef(false);
   const [exito, setExito] = useState<{ importe: number } | null>(null);
 
   const enviar = async (ev: FormEvent) => {
     ev.preventDefault();
+    if (envioEnCurso.current) return;
     setError(null);
     const v = validarB({ nombre, email, telefono, asiste: asiste === 'si', edadTitular: edad });
     if (v) {
@@ -61,40 +70,45 @@ function FormB({ settings, mod, diseno, texto }: { settings: EventVM; mod: Modal
       setError('Confirmá que esta invitación corresponde a Compañeros.');
       return;
     }
+    envioEnCurso.current = true;
     setEnviando(true);
     try {
-      // ÚNICA vía válida para B: RPC validada en servidor. Sin fallback
-      // directo (no podría validar modalidad ni prohibir acompañantes).
-      const { data, error } = await supabase.rpc('registrar_rsvp', {
-        payload: payloadB({
-          nombre, email, telefono, asiste: asiste === 'si', edadTitular: edad,
-        }),
+      // La función valida la invitación y la composición antes de llamar a la RPC privada.
+      const { data, error } = await supabase.functions.invoke('registrar-rsvp', {
+        body: {
+          token,
+          payload: payloadB({
+            nombre, email, telefono, asiste: asiste === 'si', edadTitular: edad,
+          }),
+        },
       });
-      const resp = data as { ok?: boolean; motivo?: string; guest_id?: string; importe?: number } | null;
+      const resp = data as { ok?: boolean; motivo?: string; guest_id?: string; importe?: number; modalidad?: string } | null;
       if (!error && resp?.ok) {
-        if (typeof resp.guest_id !== 'string' || resp.importe !== importeB(asiste === 'si')) {
+        if (
+          typeof resp.guest_id !== 'string' ||
+          resp.modalidad !== mod.codigo ||
+          resp.importe !== importeB(asiste === 'si', mod.precio)
+        ) {
           throw new Error('El servidor respondió sin un importe/modalidad verificables. No se confirmó el registro.');
         }
         setExito({ importe: resp.importe });
         return;
       }
       if (!error && resp && !resp.ok) {
-        if (resp.motivo === 'duplicado') {
-          throw new Error('Ese correo ya tiene una confirmación registrada. Escribinos por WhatsApp.');
-        }
-        if (resp.motivo === 'modalidad') {
-          throw new Error('Esta tarjeta aún no admite registros en línea.');
-        }
-        throw new Error('Revisá los datos e intentá de nuevo.');
-      }
-      const code = (error as { code?: string } | null)?.code;
-      if (code === 'PGRST202') {
-        throw new Error('El registro en línea para compañeros aún no está habilitado.');
+        const motivos: Record<string, string> = {
+          nombre: 'Contanos tu nombre y apellido.',
+          email: 'Revisá el correo electrónico: no parece válido.',
+          cantidades: 'Revisá los datos e intentá de nuevo.',
+          detalle: 'Revisá los datos e intentá de nuevo.',
+          edad: 'Revisá tu edad.',
+        };
+        throw new Error(motivos[resp.motivo ?? ''] ?? 'No pudimos guardar tu confirmación. Probá de nuevo en unos minutos.');
       }
       throw new Error('No pudimos guardar tu confirmación. Probá de nuevo en unos minutos.');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Ocurrió un error inesperado.');
     } finally {
+      envioEnCurso.current = false;
       setEnviando(false);
     }
   };
@@ -138,7 +152,7 @@ function FormB({ settings, mod, diseno, texto }: { settings: EventVM; mod: Modal
             className="mt-1 accent-[#d6bd7a]"
           />
           <span>
-            Confirmo modalidad <strong>Compañeros</strong>: 21:00 a 02:00, $40.000 por compañero,
+            Confirmo modalidad <strong>{mod.nombre}</strong>: {mod.hora_inicio} a {mod.hora_fin}, {formatoARS(mod.precio)} por persona,
             sin acompañantes ni exención por edad.
           </span>
         </label>
@@ -178,7 +192,7 @@ function FormB({ settings, mod, diseno, texto }: { settings: EventVM; mod: Modal
         {asiste === 'si' && (
           <>
             <div className="mt-4 rounded-xl border border-[#d6bd7a]/30 bg-[#183b2d]/70 p-4 text-center">
-              <p className="font-serifada text-3xl text-[#ecdcb0]">{formatoARS(importeB(true))}</p>
+              <p className="font-serifada text-3xl text-[#ecdcb0]">{formatoARS(importeB(true, mod.precio))}</p>
               <p className="text-xs text-[#a8b39a]">{aplicarPlantilla(t('b_form_precio_nota'), { LimitePago: formatearFechaLarga(mod.limite_pago) })}</p>
             </div>
           </>
@@ -195,15 +209,19 @@ function FormB({ settings, mod, diseno, texto }: { settings: EventVM; mod: Modal
 
 export default function CompanerosView({
   settings,
+  modalidad,
+  token,
   diseno,
   texto,
 }: {
   settings: EventVM;
+  modalidad: ModalidadConfig;
+  token: string;
   diseno: DisenoMap;
   texto: TextoFn;
 }) {
   const t = (clave: string) => texto(clave, defectoDe(clave));
-  const [mod, setMod] = useState<ModalidadConfig>({ ...MODALIDAD_B_ESTATICA });
+  const mod = modalidad;
   const reduceMotion = useReducedMotion();
   const fondoPortada = resolverFondo(diseno, 'diseno_b_portada');
   // Misma fotografía que en Familiares (mismo archivo, sin copiar ni duplicar
@@ -211,16 +229,6 @@ export default function CompanerosView({
   const figuraB = resolverFondo(diseno, 'diseno_figura');
   const ALT_FIGURA_B =
     'Antonella de espaldas, con vestido verde de quince años, mirando hacia la luz del bosque encantado';
-
-  useEffect(() => {
-    let vivo = true;
-    cargarModalidad(supabase, 'companeros').then((m) => {
-      if (vivo) setMod(m);
-    });
-    return () => {
-      vivo = false;
-    };
-  }, []);
 
   const adaptados: EventVM = {
     ...settings,
@@ -283,11 +291,6 @@ export default function CompanerosView({
           >
             {t('b_portada_boton')} <ChevronDown size={16} aria-hidden="true" />
           </motion.a>
-          {!mod.remoto && (
-            <p className="texto-sobre-foto mt-4 text-[11px] tracking-wide text-[#a8b39a]">
-              Datos provisorios aprobados; la configuración del servidor aún no está publicada.
-            </p>
-          )}
         </div>
       </header>
 
@@ -361,7 +364,7 @@ export default function CompanerosView({
           </div>
         </Seccion>
 
-        <FormB settings={settings} mod={mod} diseno={diseno} texto={texto} />
+        <FormB settings={settings} mod={mod} token={token} diseno={diseno} texto={texto} />
         <MusicaFondo />
       </main>
 
