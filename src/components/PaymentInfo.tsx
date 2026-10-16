@@ -30,8 +30,8 @@ export default function Pagos({ settings, diseno }: { settings: EventVM; diseno:
       <div className="panel-lectura rounded-2xl p-6 text-left space-y-4">
         <p className="flex items-start gap-3 font-serifada text-lg text-[#f8f4e9]">
           <BadgeDollarSign size={20} className="text-[#d6bd7a] mt-1 shrink-0" aria-hidden="true" />
-          Tarjeta: {formatoARS(settings.precio_tarjeta)} por persona que deba abonar. Los menores de{' '}
-          {settings.edad_minima_paga} años no abonan.
+          Tarjeta: {formatoARS(settings.precio_tarjeta)} por persona que deba abonar.
+          Los menores de {settings.edad_minima_paga} años no abonan.
         </p>
         <div className="rounded-xl border border-[#d6bd7a]/30 bg-[#183b2d]/60 p-4">
           <p className="text-xs uppercase tracking-[0.25em] text-[#a8b39a]">Alias</p>

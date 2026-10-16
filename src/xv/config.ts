@@ -40,11 +40,11 @@ export const DEFAULT_EVENT: EventForm = {
   vestimenta: 'Formal',
   fecha_limite_confirmacion: '2026-11-25',
   fecha_limite_pago: '2026-12-10',
-  precio_tarjeta: 0,
-  edad_minima_paga: 0,
-  whatsapp_comprobantes: '',
-  alias_transferencia: '',
-  titular_transferencia: '',
+  precio_tarjeta: 70000,
+  edad_minima_paga: 10,
+  whatsapp_comprobantes: '543518188659',
+  alias_transferencia: 'LOPEZGUADACRISTINA05',
+  titular_transferencia: 'Guadalupe Cristina López',
   mensaje_final: '',
 };
 

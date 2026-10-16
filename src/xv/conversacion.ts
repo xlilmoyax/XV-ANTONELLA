@@ -193,10 +193,10 @@ function rExentos(d: DatosAsistente): RespuestaEstructurada {
     tema: 'exentos',
     titulo: `Menores exentos: ${m.exentos.length} personas en ${m.exentosInvitados.length} registros`,
     lineas: [
-      'Solo Familia y amigos: menores de 10 años no abonan. Compañeros no tiene exención por edad.',
+      `Menores de ${d.ajustes.edad_minima_paga} años al día del evento. No generan deuda.`,
       `Su autorización sigue el circuito explícito pendiente de esquema.`,
     ],
-    metodo: 'Attendees menores de 10 en registros confirmados de Familia y amigos con modalidad, composición e importe validados.',
+    metodo: 'Attendees con edad < regla en invitados confirmados.',
     destino: { tab: 'verificados', texto: 'Abrir verificados' },
   };
 }

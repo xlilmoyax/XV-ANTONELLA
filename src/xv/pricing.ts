@@ -22,54 +22,6 @@ export function importeEstimado(cantidadQueAbonan: number, precioTarjeta: number
   return Math.max(0, cantidadQueAbonan) * Math.max(0, precioTarjeta);
 }
 
-export type CodigoModalidad = 'familia_amigos' | 'companeros';
-
-export interface CalculoModalidad {
-  importe: number;
-  personasQueAbonan: number;
-  error: string | null;
-}
-
-/** Calculates only from a verified modality and the recorded attendee ages. */
-export function calcularImporteModalidad(
-  modalidad: string | null,
-  edades: Array<number | null>,
-  adultos: number,
-  menores: number,
-  precioTarjeta: number,
-  edadMinimaPaga: number | null,
-): CalculoModalidad {
-  if (modalidad !== 'familia_amigos' && modalidad !== 'companeros') {
-    return { importe: 0, personasQueAbonan: 0, error: 'Modalidad sin clasificar o desconocida.' };
-  }
-  if (
-    !Number.isInteger(adultos) ||
-    !Number.isInteger(menores) ||
-    adultos < 0 ||
-    menores < 0 ||
-    adultos + menores !== edades.length
-  ) {
-    return { importe: 0, personasQueAbonan: 0, error: 'Las cantidades no coinciden con las personas registradas.' };
-  }
-  if (!Number.isInteger(precioTarjeta) || precioTarjeta <= 0) {
-    return { importe: 0, personasQueAbonan: 0, error: 'La configuración del importe no es válida.' };
-  }
-  if (modalidad === 'companeros') {
-    if (edades.length !== 1) {
-      return { importe: 0, personasQueAbonan: 0, error: 'Compañeros admite una sola persona y ningún acompañante.' };
-    }
-    return { importe: importeEstimado(1, precioTarjeta), personasQueAbonan: 1, error: null };
-  }
-  if (!Number.isInteger(edadMinimaPaga) || edadMinimaPaga === null || edadMinimaPaga < 0) {
-    return { importe: 0, personasQueAbonan: 0, error: 'La regla de edad no es válida.' };
-  }
-  if (edades.some((edad) => edad === null || !Number.isInteger(edad) || edad < 0 || edad > 120)) {
-    return { importe: 0, personasQueAbonan: 0, error: 'Falta una edad necesaria para validar la exención familiar.' };
-  }
-  const personasQueAbonan = edades.filter((edad) => debeAbonar(edad, edadMinimaPaga)).length;
-  return { importe: importeEstimado(personasQueAbonan, precioTarjeta), personasQueAbonan, error: null };
-}
-
 export function formatoARS(monto: number): string {
   return new Intl.NumberFormat('es-AR', {
     style: 'currency',

@@ -38,7 +38,6 @@ export interface EventSettings {
 
 export interface Guest {
   id: string;
-  modalidad_id: string | null;
   nombre_apellido: string;
   email: string;
   telefono: string | null;

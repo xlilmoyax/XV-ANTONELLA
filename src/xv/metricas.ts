@@ -23,7 +23,6 @@
  */
 
 import type { Attendee, Guest } from './types';
-import { calcularImporteModalidad, formatoARS } from './pricing';
 
 export interface PagoRow {
   id: string;
@@ -73,6 +72,8 @@ export interface AuditRow {
 }
 
 export interface AjustesEvento {
+  precio_tarjeta: number;
+  edad_minima_paga: number;
   fecha_limite_pago: string;
   recordatorio_cada_dias: number;
   recordatorios_activos: boolean;
@@ -184,59 +185,10 @@ export function calcularMetricas(
   miembros: MiembroRow[],
   logs: EmailLogRow[],
   aj: AjustesEvento,
-  modalidades: Array<{
-    id: string;
-    codigo: string;
-    precio_tarjeta: number;
-    edad_minima_paga: number | null;
-  }> = [],
 ): Metricas {
   const porGuest = porId(guests);
-  const modalidadPorId = new Map(modalidades.map((m) => [m.id, m]));
-  const codigoPorModalidad = new Map(modalidades.map((m) => [m.id, m.codigo]));
-  const attendeesPorGuest = new Map<string, Attendee[]>();
-  for (const attendee of attendees) {
-    const existentes = attendeesPorGuest.get(attendee.guest_id) ?? [];
-    existentes.push(attendee);
-    attendeesPorGuest.set(attendee.guest_id, existentes);
-  }
   const confirmados = guests.filter(esConfirmado);
   const confirmadosIds = new Set(confirmados.map((g) => g.id));
-  const calculos = new Map<string, ReturnType<typeof calcularImporteModalidad>>();
-  const pagantesPorGuest = new Map<string, number>();
-  const modalidadValida = new Set<string>();
-  const modalidadIncoherente: Inconsistencia[] = [];
-  for (const g of confirmados) {
-    const modalidad = g.modalidad_id ? modalidadPorId.get(g.modalidad_id) ?? null : null;
-    if (!modalidad) {
-      modalidadIncoherente.push({
-        tipo: 'modalidad',
-        detalle: `${g.nombre_apellido}: falta una modalidad validada; importe histórico conservado.`,
-        guestId: g.id,
-      });
-      continue;
-    }
-    const filas = attendeesPorGuest.get(g.id) ?? [];
-    const calculo = calcularImporteModalidad(
-      modalidad.codigo,
-      filas.map((a) => a.edad_al_evento),
-      g.cantidad_adultos,
-      g.cantidad_menores,
-      modalidad.precio_tarjeta,
-      modalidad.edad_minima_paga,
-    );
-    calculos.set(g.id, calculo);
-    if (calculo.error || calculo.importe !== g.importe_estimado) {
-      modalidadIncoherente.push({
-        tipo: 'importe-modalidad',
-        detalle: `${g.nombre_apellido}: importe guardado ${formatoARS(g.importe_estimado)}; ${calculo.error ?? `cálculo validado ${formatoARS(calculo.importe)}`}.`,
-        guestId: g.id,
-      });
-      continue;
-    }
-    pagantesPorGuest.set(g.id, calculo.personasQueAbonan);
-    modalidadValida.add(g.id);
-  }
 
   const personasConfirmadas = confirmados.reduce((a, g) => a + personasDe(g), 0);
   const adultos = confirmados.reduce((a, g) => a + (g.cantidad_adultos ?? 0), 0);
@@ -247,23 +199,24 @@ export function calcularMetricas(
   );
   const noAsisten = guests.filter((g) => g.asistencia === 'no_asistira');
 
-  // La exención por edad solo aplica a Familia y amigos.
+  // Menores exentos: attendees con edad < regla, de invitados confirmados.
   const exentos = attendees.filter(
     (a) =>
       a.edad_al_evento !== null &&
       a.edad_al_evento !== undefined &&
-      a.edad_al_evento < 10 &&
-      codigoPorModalidad.get(porGuest.get(a.guest_id)?.modalidad_id ?? '') === 'familia_amigos' &&
-      modalidadValida.has(a.guest_id) &&
+      a.edad_al_evento < aj.edad_minima_paga &&
       confirmadosIds.has(a.guest_id),
   );
   const exentosGuestIds = new Set(exentos.map((a) => a.guest_id));
   const exentosInvitados = guests.filter((g) => exentosGuestIds.has(g.id));
 
-  const paganPersonas = [...pagantesPorGuest.values()].reduce((total, cantidad) => total + cantidad, 0);
+  // Personas que abonan: flag debe_abonar en confirmados (informativo).
+  const paganPersonas = attendees.filter(
+    (a) => a.debe_abonar && confirmadosIds.has(a.guest_id),
+  ).length;
 
   const sinPagoRegistros = confirmados.filter((g) => g.estado_pago === PAGO.pendiente);
-  const sinPagoPersonas = sinPagoRegistros.reduce((a, g) => a + (pagantesPorGuest.get(g.id) ?? 0), 0);
+  const sinPagoPersonas = sinPagoRegistros.reduce((a, g) => a + personasDe(g), 0);
 
   const informadosGuests = guests.filter((g) => g.estado_pago === PAGO.informado);
   const informadosRecords = payments.filter((p) => p.estado === PAGO.informado);
@@ -275,10 +228,10 @@ export function calcularMetricas(
   const recaudadoVerificado = verificadosRecords.reduce((a, p) => a + (p.monto ?? 0), 0);
   const recaudadoDeclarado = informadosRecords.reduce((a, p) => a + (p.monto ?? 0), 0);
   const importeEsperado = confirmados
-    .filter((g) => g.estado_pago !== PAGO.noCorresponde && modalidadValida.has(g.id))
+    .filter((g) => g.estado_pago !== PAGO.noCorresponde)
     .reduce((a, g) => a + (g.importe_estimado ?? 0), 0);
   const importePendiente = confirmados
-    .filter((g) => g.estado_pago === PAGO.pendiente && modalidadValida.has(g.id))
+    .filter((g) => g.estado_pago === PAGO.pendiente)
     .reduce((a, g) => a + (g.importe_estimado ?? 0), 0);
 
   const alDia = confirmados.filter(
@@ -337,7 +290,6 @@ export function calcularMetricas(
   }
 
   const inconsistencias: Inconsistencia[] = [
-    ...modalidadIncoherente,
     ...conteoIncoherente,
     ...informadosSinAviso.map((g) => ({
       tipo: 'aviso',
@@ -364,12 +316,15 @@ export function calcularMetricas(
     miembrosPorGrupo.get(m.group_id)!.push(m.guest_id);
   }
   const gruposAgg: GrupoAgregado[] = grupos.map((gr) => {
-    const ids = [...new Set(miembrosPorGrupo.get(gr.id) ?? [])];
+    const ids = miembrosPorGrupo.get(gr.id) ?? [];
     const gs = ids.map((id) => porGuest.get(id)).filter((x): x is Guest => Boolean(x));
     const conf = gs.filter(esConfirmado);
-    const pagan = ids.reduce((total, id) => total + (pagantesPorGuest.get(id) ?? 0), 0);
+    const attIds = new Set(ids);
+    const pagan = attendees.filter(
+      (a) => attIds.has(a.guest_id) && a.debe_abonar && confirmadosIds.has(a.guest_id),
+    ).length;
     const esperado = conf
-      .filter((g) => g.estado_pago !== PAGO.noCorresponde && modalidadValida.has(g.id))
+      .filter((g) => g.estado_pago !== PAGO.noCorresponde)
       .reduce((a, g) => a + (g.importe_estimado ?? 0), 0);
     const verificado = conf
       .flatMap((g) => recordsPorGuest.get(g.id) ?? [])
@@ -400,12 +355,7 @@ export function calcularMetricas(
   }
   const cadaMs = Math.max(1, aj.recordatorio_cada_dias || 10) * 86_400_000;
   const candidatosRecordatorio: CandidatoRecordatorio[] = confirmados
-    .filter((g) =>
-      g.estado_pago === PAGO.pendiente &&
-      (g.importe_estimado ?? 0) > 0 &&
-      calculos.get(g.id)?.error === null &&
-      calculos.get(g.id)?.importe === g.importe_estimado,
-    )
+    .filter((g) => g.estado_pago === PAGO.pendiente && (g.importe_estimado ?? 0) > 0)
     .map((g) => {
       const ult = ultimoEnvio.get(g.id) ?? null;
       const proxima = ult

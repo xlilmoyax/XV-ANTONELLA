@@ -17,8 +17,7 @@ import {
 import { isSupabaseConfigured, supabase } from '../lib/supabaseClient';
 import type { Attendee, Guest } from '../xv/types';
 import { calcularMetricas, type AjustesEvento, type AuditRow, type EmailLogRow, type GrupoRow, type MiembroRow, type PagoRow } from '../xv/metricas';
-import { vistaModalidad } from '../xv/modalidad';
-import { formatoARS } from '../xv/pricing';
+import { enlacePara, vistaModalidad } from '../xv/modalidad';
 import {
   Asistente,
   Contenidos,
@@ -125,10 +124,7 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
   const [actualizacion, setActualizacion] = useState('');
   const [filtroMod, setFiltroMod] = useState<string>('todas');
   const [copiado, setCopiado] = useState<string | null>(null);
-  const [emitiendo, setEmitiendo] = useState(false);
-  const [modalidades, setModalidades] = useState<
-    Array<{ id: string; codigo: string; nombre: string; precio_tarjeta: number; edad_minima_paga: number | null }>
-  >([]);
+  const [modalidades, setModalidades] = useState<Array<{ id: string; codigo: string; nombre: string }>>([]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -137,6 +133,22 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
       else setCargando(false);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Catálogo de modalidades (lectura pública; tolera tabla ausente pre-0006).
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data, error } = await supabase.from('modalidades').select('id,codigo,nombre');
+        if (!error && Array.isArray(data)) {
+          setModalidades(
+            (data as Array<{ id: string; codigo: string; nombre: string }>).filter((x) => x?.id && x?.codigo),
+          );
+        }
+      } catch {
+        /* sin modalidades: el filtro muestra "sin clasificar" */
+      }
+    })();
   }, []);
 
   const verificarAdmin = async (em: string) => {
@@ -161,7 +173,7 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
 
   const recargar = async () => {
     setActualizando(true);
-    const [g, a, p, gr, m, s, sec, tpl, lg, au, vs, img, mo] = await Promise.all([
+    const [g, a, p, gr, m, s, sec, tpl, lg, au, vs, img] = await Promise.all([
       segura(supabase.from('guests').select('*').order('created_at', { ascending: false }).limit(2000)),
       segura(supabase.from('attendees').select('*').limit(5000)),
       segura(supabase.from('payment_records').select('*').order('created_at', { ascending: false }).limit(500)),
@@ -174,7 +186,6 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
       segura(supabase.from('audit_logs').select('*').order('created_at', { ascending: false }).limit(200)),
       segura(supabase.from('configuration_versions').select('id,nombre,descripcion,creado_por,created_at').order('created_at', { ascending: false }).limit(50)),
       segura(supabase.from('gallery_images').select('*').order('orden')),
-      segura(supabase.from('modalidades').select('id,codigo,nombre,precio_tarjeta,edad_minima_paga')),
     ]);
     const err: Record<string, string> = {};
     if (g.error) err.guests = g.error; else setGuests((g.data as Guest[]) ?? []);
@@ -189,13 +200,6 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
     if (au.error) err.audits = au.error; else setAudits((au.data as AuditRow[]) ?? []);
     if (vs.error) err.versions = vs.error; else setVersions((vs.data as R[]) ?? []);
     if (img.error) err.images = img.error; else setImages((img.data as R[]) ?? []);
-    if (mo.error) err.modalities = mo.error;
-    else {
-      setModalidades(
-        ((mo.data as Array<{ id: string; codigo: string; nombre: string; precio_tarjeta: number; edad_minima_paga: number | null }>) ?? [])
-          .filter((x) => x?.id && x?.codigo),
-      );
-    }
     setErrores(err);
     setActualizacion(new Date().toLocaleString('es-AR'));
     setActualizando(false);
@@ -240,38 +244,22 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
     window.scrollTo({ top: 0 });
   };
 
-  const copiarEnlace = async (codigo: 'familia_amigos' | 'companeros') => {
-    setEmitiendo(true);
+  const copiarEnlace = async (codigo: 'familiares' | 'companeros') => {
     try {
-      let url: string;
-      try {
-        const { data, error } = await supabase.functions.invoke('emitir-invitacion', {
-          body: { modalidad: codigo },
-        });
-        if (error || !data?.ok || typeof data.url !== 'string') {
-          setCopiado('No se pudo confirmar la emisión de la invitación. Verificá el resultado antes de volver a intentarlo.');
-          return;
-        }
-        url = data.url;
-      } catch {
-        setCopiado('No se pudo confirmar la emisión de la invitación. Verificá el resultado antes de volver a intentarlo.');
-        return;
-      }
-
-      try {
-        await navigator.clipboard.writeText(url);
-        setCopiado(`Invitación segura copiada: ${codigo === 'companeros' ? 'Compañeros' : 'Familiares y amigos'}.`);
-      } catch {
-        setCopiado('La invitación se emitió, pero no se copió ni se entregó. Generá otra solo cuando puedas copiarla.');
-      }
-    } finally {
-      setEmitiendo(false);
+      await navigator.clipboard.writeText(
+        enlacePara(codigo, window.location.origin, window.location.pathname),
+      );
+      setCopiado(`Enlace copiado: ${codigo === 'companeros' ? 'Compañeros' : 'Familiares y amigos'}.`);
+    } catch {
+      setCopiado('No se pudo copiar (portapapeles no disponible).');
     }
     setTimeout(() => setCopiado(null), 4000);
   };
 
   const ajustes: AjustesEvento | null = settings
     ? {
+        precio_tarjeta: Number(settings.precio_tarjeta ?? 0),
+        edad_minima_paga: Number(settings.edad_minima_paga ?? 10),
         fecha_limite_pago: String(settings.fecha_limite_pago ?? ''),
         recordatorio_cada_dias: Number(settings.recordatorio_cada_dias ?? 10),
         recordatorios_activos: Boolean(settings.recordatorios_activos ?? true),
@@ -281,11 +269,7 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
   // Vista por modalidad: un solo filtro global; dashboard, listados,
   // asistente e informes usan el mismo recorte (consistencia garantizada).
   const modId =
-    filtroMod === 'todas'
-      ? null
-      : filtroMod === 'sin_clasificar'
-        ? 'sin_clasificar'
-        : (modalidades.find((x) => x.codigo === filtroMod)?.id ?? 'inexistente');
+    filtroMod === 'todas' ? null : (modalidades.find((x) => x.codigo === filtroMod)?.id ?? 'inexistente');
   const fuente = useMemo(
     () => vistaModalidad(guests, attendees, payments, modId),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -295,10 +279,10 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
   const metrica = useMemo(
     () =>
       ajustes
-        ? calcularMetricas(fuente.guests, fuente.attendees, fuente.payments, groups, members, logs, ajustes, modalidades)
+        ? calcularMetricas(fuente.guests, fuente.attendees, fuente.payments, groups, members, logs, ajustes)
         : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [fuente, groups, members, logs, settings, modalidades],
+    [fuente, groups, members, logs, settings],
   );
 
   if (cargando) {
@@ -332,8 +316,6 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
 
   const sinConfig = !settings;
   const sinInvitados = Boolean(errores.guests);
-  const tarifaFamiliar = modalidades.find((modalidad) => modalidad.codigo === 'familia_amigos');
-  const tarifaAcompanantes = modalidades.find((modalidad) => modalidad.codigo === 'companeros');
 
   const ctx: Ctx | null =
     metrica && ajustes
@@ -433,7 +415,7 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
               <p className="text-sm text-stone-500">{TITULOS[foco.tab].bajada}</p>
               {filtroMod !== 'todas' && (
                 <p className="mt-1 inline-block rounded-full bg-[#d6bd7a]/40 px-2 py-0.5 text-[11px] font-medium text-[#183b2d]">
-                  Vista: {filtroMod === 'sin_clasificar' ? 'Sin clasificar' : modalidades.find((x) => x.codigo === filtroMod)?.nombre ?? filtroMod}
+                  Vista: {modalidades.find((x) => x.codigo === filtroMod)?.nombre ?? filtroMod}
                   {modId === 'inexistente' ? ' (tabla de modalidades aún no disponible: sin registros)' : ''}
                 </p>
               )}
@@ -448,8 +430,7 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
                   className="rounded-full border border-stone-300 bg-white px-2 py-1.5 text-xs font-medium text-stone-700"
                 >
                   <option value="todas">Todas</option>
-                  <option value="sin_clasificar">Sin clasificar</option>
-                  <option value="familia_amigos">Familia y amigos</option>
+                  <option value="familiares">Familiares y amigos</option>
                   <option value="companeros">Compañeros</option>
                 </select>
               </label>
@@ -465,49 +446,22 @@ export default function Admin({ onSalir }: { onSalir: () => void }) {
             </div>
           </div>
 
-          <section className="mt-4 grid gap-3 sm:grid-cols-3" aria-label="Tarifas y clasificación">
-            <article className="rounded-xl border border-stone-200 bg-white p-4">
-              <h3 className="text-xs uppercase tracking-[0.15em] text-stone-500">Tarjeta familiar</h3>
-              <p className="mt-1 font-serifada text-2xl text-[#183b2d]">
-                {tarifaFamiliar ? formatoARS(tarifaFamiliar.precio_tarjeta) : 'Precio no disponible'}
-              </p>
-            </article>
-            <article className="rounded-xl border border-stone-200 bg-white p-4">
-              <h3 className="text-xs uppercase tracking-[0.15em] text-stone-500">Tarjeta de acompañantes</h3>
-              <p className="mt-1 font-serifada text-2xl text-[#183b2d]">
-                {tarifaAcompanantes ? `${formatoARS(tarifaAcompanantes.precio_tarjeta)} por persona` : 'Precio no disponible'}
-              </p>
-            </article>
-            <article className="rounded-xl border border-amber-200 bg-amber-50 p-4">
-              <h3 className="text-xs uppercase tracking-[0.15em] text-amber-900">Históricos sin modalidad confirmada</h3>
-              <button
-                type="button"
-                onClick={() => setFiltroMod('sin_clasificar')}
-                className="mt-1 text-sm font-medium text-amber-950 underline underline-offset-2"
-              >
-                Ver registros sin clasificar
-              </button>
-            </article>
-          </section>
-
           <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs" aria-label="Enlaces para invitados">
             <span className="font-medium text-stone-700">Enlaces:</span>
             <button
-              onClick={() => copiarEnlace('familia_amigos')}
-              disabled={emitiendo}
-              className="rounded-full border border-stone-300 px-3 py-1.5 font-medium text-stone-700 hover:bg-stone-100 disabled:opacity-50"
+              onClick={() => copiarEnlace('familiares')}
+              className="rounded-full border border-stone-300 px-3 py-1.5 font-medium text-stone-700 hover:bg-stone-100"
             >
-              Generar y copiar Familiares y amigos
+              Copiar Familiares y amigos
             </button>
             <button
               onClick={() => copiarEnlace('companeros')}
-              disabled={emitiendo}
-              className="rounded-full border border-stone-300 px-3 py-1.5 font-medium text-stone-700 hover:bg-stone-100 disabled:opacity-50"
+              className="rounded-full border border-stone-300 px-3 py-1.5 font-medium text-stone-700 hover:bg-stone-100"
             >
-              Generar y copiar Compañeros
+              Copiar Compañeros
             </button>
             {copiado && <span role="status" className="text-emerald-800">{copiado}</span>}
-            <span className="text-stone-500">Cada enlace habilita un registro de esta modalidad. Compartilo solo con el destinatario; vence al cierre del plazo de confirmación.</span>
+            <span className="text-stone-500">Los enlaces solo abren la tarjeta; no autorizan. B aún no admite registros reales.</span>
           </div>
 
           {Object.keys(errores).length > 0 && (
