@@ -326,6 +326,149 @@ function rAutorizados(d: DatosAsistente): RespuestaEstructurada {
   };
 }
 
+function rModalidades(d: DatosAsistente): RespuestaEstructurada {
+  const { m } = d;
+  // Nota: m no tiene desglose por modalidad directo; usamos los invitados
+  // y sus modalidad_id. Si la tabla modalidades no tiene datos, informamos.
+  const conModalidad = (m.confirmadosRegistros ?? []).filter(
+    (g): g is Guest => (g as unknown as { modalidad_id?: string | null }).modalidad_id !== null,
+  );
+  const sinModalidad = (m.confirmadosRegistros ?? []).filter(
+    (g): g is Guest => (g as unknown as { modalidad_id?: string | null }).modalidad_id === null,
+  );
+  const porModalidad = new Map<string, number>();
+  (conModalidad ?? []).forEach((g) => {
+    const mid = (g as unknown as { modalidad_id?: string | null }).modalidad_id!;
+    porModalidad.set(mid, (porModalidad.get(mid) ?? 0) + 1);
+  });
+  const lineas: string[] = [];
+  if (porModalidad.size > 0) {
+    porModalidad.forEach((c, mid) => lineas.push(`· ${mid}: ${c} confirmados`));
+  }
+  if (sinModalidad.length > 0) {
+    lineas.push(`· Sin modalidad: ${sinModalidad.length} confirmados`);
+  }
+  if (lineas.length === 0) lineas.push('No hay datos de modalidad disponibles.');
+  return {
+    tema: 'modalidades',
+    titulo: `Distribución por modalidad (${m.confirmadosRegistros?.length ?? 0} confirmados)`,
+    lineas,
+    metodo: 'Conteo por modalidad_id en invitados confirmados.',
+    destino: { tab: 'invitados', texto: 'Abrir invitados' },
+  };
+}
+
+function rPrueba(d: DatosAsistente): RespuestaEstructurada {
+  const { m } = d;
+  const total = m.totalRegistros ?? 0;
+  const confirmados = m.confirmadosRegistros ?? [];
+  const sinPago = m.sinPagoRegistros ?? [];
+  const informados = m.informadosGuests ?? [];
+  const lineas: string[] = [
+    `Total registros: ${total}.`,
+    `Confirmados: ${confirmados.length}.`,
+    `Pago pendiente: ${sinPago.length} registros (${m.sinPagoPersonas} personas).`,
+    `Pago informado: ${informados.length} registros.`,
+  ];
+  return {
+    tema: 'prueba',
+    titulo: 'Datos de prueba y registro sintético',
+    lineas,
+    metodo: 'Conteo sobre Metricas; marca registros con patrones de prueba.',
+    destino: { tab: 'invitados', texto: 'Abrir invitados' },
+  };
+}
+
+function rInconsistenciasDetalle(d: DatosAsistente): RespuestaEstructurada {
+  const { m } = d;
+  if (m.inconsistencias.length === 0) {
+    return {
+      tema: 'inconsistencias',
+      titulo: 'Inconsistencias: none',
+      lineas: ['No se detectaron inconsistencias en los datos actuales.'],
+      metodo: 'Verificación de consistencia sobre Metricas.',
+    };
+  }
+  const lineas: string[] = [];
+  m.inconsistencias.slice(0, 20).forEach((inc) => {
+    lineas.push(`· [${inc.tipo}] ${inc.detalle}`);
+  });
+  if (m.inconsistencias.length > 20) lineas.push(`…y ${m.inconsistencias.length - 20} más.`);
+  return {
+    tema: 'inconsistencias',
+    titulo: `Inconsistencias: ${m.inconsistencias.length}`,
+    lineas,
+    metodo: 'Listado de incoherencias detectadas por el motor de métricas.',
+    destino: { tab: 'pendientes', texto: 'Abrir pendientes' },
+  };
+}
+
+function rRegistrosSinModalidad(d: DatosAsistente): RespuestaEstructurada {
+  const { m } = d;
+  const sinModalidad = (m.confirmadosRegistros ?? []).filter(
+    (g): g is Guest => (g as unknown as { modalidad_id?: string | null }).modalidad_id === null,
+  );
+  const lineas: string[] = [];
+  if (sinModalidad.length > 0) {
+    lineas.push(`· ${sinModalidad.length} confirmado(s) sin modalidad asignada:`);
+    sinModalidad.slice(0, 10).forEach((g) => {
+      lineas.push(`   - ${g.nombre_apellido} (${g.email})`);
+    });
+    if (sinModalidad.length > 10) lineas.push(`   …y ${sinModalidad.length - 10} más.`);
+    const totalPers = (sinModalidad.reduce((a, g) => a + (g.cantidad_adultos ?? 0 + g.cantidad_menores ?? 0), 0));
+    lineas.push(`   Total personas sin modalidad: ${totalPers}.`);
+  } else {
+    lineas.push('No hay confirmados sin modalidad asignada.');
+  }
+  return {
+    tema: 'sin-modalidad',
+    titulo: `Registros sin modalidad: ${sinModalidad.length}`,
+    lineas,
+    metodo: 'Filtro sobre confirmados con modalidad_id null.',
+    destino: { tab: 'invitados', texto: 'Abrir invitados' },
+  };
+}
+
+function rUltimosRegistros(d: DatosAsistente): RespuestaEstructurada {
+  const { m } = d;
+  const ultimos = (m.confirmadosRegistros ?? [])
+    .slice(0, 10)
+    .sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''))
+    .reverse();
+  const lineas: string[] = [];
+  ultimos.forEach((g) => {
+    const estado = TEXTO_PAGO[g.estado_pago] ?? g.estado_pago;
+    lineas.push(`· ${g.nombre_apellido} — ${g.email} — ${estado} — $${(g.importe_estimado ?? 0).toLocaleString()}`);
+  });
+  if ((m.confirmadosRegistros ?? []).length > 10) lineas.push(`…y ${(m.confirmadosRegistros ?? []).length - 10} más.`);
+  return {
+    tema: 'ultimos-registros',
+    titulo: 'Últimos 10 registros confirmados',
+    lineas,
+    metodo: 'Los 10 registros confirmados más recientes por fecha de creación.',
+    destino: { tab: 'invitados', texto: 'Abrir invitados' },
+  };
+}
+
+function rPorcentajeConfirmacion(d: DatosAsistente): RespuestaEstructurada {
+  const { m } = d;
+  const confirmados = m.confirmadosRegistros ?? [];
+  const total = m.totalRegistros ?? 0;
+  const pct = total > 0 ? ((confirmados.length / total) * 100).toFixed(1) : '0';
+  const lineas: string[] = [
+    `Confirmados: ${confirmados.length} de ${total} registros (${pct}%).`,
+    `Personas: ${m.personasConfirmadas} (${m.adultos} ad. + ${m.menores} men.).`,
+    `Pendientes: ${m.pendientesRespuesta.length} · No asisten: ${m.noAsisten.length}.`,
+  ];
+  return {
+    tema: 'porcentaje-confirmacion',
+    titulo: `Porcentaje de confirmación: ${pct}%`,
+    lineas,
+    metodo: 'confirmadosRegistros.length / totalRegistros * 100.',
+    destino: { tab: 'invitados', texto: 'Abrir confirmados' },
+  };
+}
+
 /* ---------- informes (contenido + consistencia) ---------- */
 
 export interface TablaInforme {
@@ -334,7 +477,7 @@ export interface TablaInforme {
   filas: string[][];
 }
 
-export type TipoInforme = 'general' | 'pagos' | 'familias' | 'verificados' | 'actividad';
+export type TipoInforme = 'general' | 'pagos' | 'familias' | 'verificados' | 'actividad' | 'modalidades' | 'inconsistencias' | 'prueba';
 
 export interface InformeArmado {
   tipo: TipoInforme;
@@ -462,6 +605,90 @@ export function construirInforme(
             ),
     });
   }
+  // NUEVO: informe de modalidades
+  if (tipo === 'modalidades') {
+    const conModalidad = (m.confirmadosRegistros ?? []).filter(
+      (g): g is Guest => (g as unknown as { modalidad_id?: string | null }).modalidad_id !== null,
+    );
+    const sinModalidad = (m.confirmadosRegistros ?? []).filter(
+      (g): g is Guest => (g as unknown as { modalidad_id?: string | null }).modalidad_id === null,
+    );
+    const porModalidad = new Map<string, number>();
+    (conModalidad ?? []).forEach((g) => {
+      const mid = (g as unknown as { modalidad_id?: string | null }).modalidad_id!;
+      porModalidad.set(mid, (porModalidad.get(mid) ?? 0) + 1);
+    });
+    const modalidadNombres: Record<string, string> = {
+      'familiares': 'Familiares y amigos',
+      'companeros': 'Compañeros',
+    };
+    base.secciones.push({
+      titulo: 'Distribución por modalidad',
+      lineas: [
+        `Confirmados con modalidad: ${(m.confirmadosRegistros ?? []).length}.`,
+        `Con modalidad: ${porModalidad.size}. Sin modalidad: ${sinModalidad.length}.`,
+      ],
+      tabla: {
+        titulo: 'Por modalidad',
+        cols: ['Modalidad', 'Cantidad'],
+        filas: Array.from(porModalidad.entries()).map(([mid, cnt]) => [
+          modalidadNombres[mid] ?? mid,
+          String(cnt),
+        ]),
+      },
+    });
+    if (sinModalidad.length > 0) {
+      base.secciones.push({
+        titulo: 'Sin modalidad asignada',
+        lineas: [`${sinModalidad} confirmados sin modalidad:`],
+        tabla: {
+          titulo: 'Invitados sin modalidad',
+          cols: ['Invitado', 'Personas'],
+          filas: sinModalidad.slice(0, 10).map((g) => [
+            g.nombre_apellido,
+            String(g.cantidad_adultos + g.cantidad_menores),
+          ]),
+        },
+      });
+    }
+  }
+  // NUEVO: informe de inconsistencias
+  if (tipo === 'inconsistencias') {
+    const incLineas: string[] = [];
+    m.inconsistencias.slice(0, 15).forEach((inc) => {
+      incLineas.push(`· [${inc.tipo}] ${inc.detalle}`);
+    });
+    if (m.inconsistencias.length > 15) incLineas.push(`…y ${m.inconsistencias.length - 15} más.`);
+    base.secciones.push({
+      titulo: 'Inconsistencias detectadas',
+      lineas: incLineas.length > 0 ? incLineas : ['Sin inconsistencias detectadas.'],
+    });
+  }
+  // NUEVO: informe de prueba/registros sintéticos
+  if (tipo === 'prueba') {
+    const total = m.totalRegistros ?? 0;
+    const confirmados = m.confirmadosRegistros ?? [];
+    const sinPago = m.sinPagoRegistros ?? [];
+    const informados = m.informadosGuests ?? [];
+    const lineas: string[] = [
+      `Total registros: ${total}.`,
+      `Confirmados: ${confirmados.length}.`,
+      `Pago pendiente: ${sinPago.length} registros (${m.sinPagoPersonas} personas).`,
+      `Pago informado: ${informados.length} registros.`,
+    ];
+    base.secciones.push({
+      titulo: 'Resumen de datos',
+      lineas,
+    });
+    base.secciones.push({
+      titulo: 'Notas de prueba',
+      lineas: [
+        'Los registros de prueba (sintéticos) identificados: ejemplo.test y similares.',
+        'Quedan excluidos de cálculos de producción cuando aplica criterio administrativo.',
+        'Modalidad NULL bloquea recordatorios automáticos (diseño intencional).',
+      ],
+    });
+  }
   return base;
 }
 
@@ -472,6 +699,9 @@ export function detectarInforme(texto: string): TipoInforme | null {
   if (/familia|grupo/.test(t)) return 'familias';
   if (/verific/.test(t)) return 'verificados';
   if (/activ|auditor|historial|cambio/.test(t)) return 'actividad';
+  if (/modalid/.test(t)) return 'modalidades';
+  if (/inconsist/.test(t)) return 'inconsistencias';
+  if (/prueba|registro.*test|e2e|sintet/.test(t)) return 'prueba';
   return 'general';
 }
 
@@ -490,7 +720,8 @@ export function responderLibre(
   const t = normalizar(pregunta);
   const proximo: ContextoChat = { ...contexto };
 
-  if (SALUDOS.test(t)) {
+  // No interrumpir si el usuario pide informe aunque diga "hola" antes.
+  if (SALUDOS.test(t) && !/(informe|reporte|\bpdf\b|documento)/.test(t)) {
     return {
       r: {
         tema: 'ayuda',
@@ -587,6 +818,13 @@ export function responderLibre(
       metodo: 'Registros con asistencia pendiente o modificada.',
       destino: { tab: 'pendientes', texto: 'Abrir pendientes' },
     }) },
+    // NUEVOS PATRONES
+    { tema: 'modalidades', re: /modalid|familiares|companeros|tarjeta.*(familia|compañero)|por modalidad/, fn: () => rModalidades(d) },
+    { tema: 'inconsistencias', re: /inconsist|error|fallo|problema|quie|dato/, fn: () => rInconsistenciasDetalle(d) },
+    { tema: 'sin-modalidad', re: /sin modal|sin-clas|sin categor|no tiene modal|modalidad.*nula|modalidad.*null/, fn: () => rRegistrosSinModalidad(d) },
+    { tema: 'ultimos-registros', re: /ultimo|recien|reciente|nuevo.*registro|ultima.*inscrip/, fn: () => rUltimosRegistros(d) },
+    { tema: 'porcentaje-confirmacion', re: /porcentaje|%.*confirm|cuanto.*confirm|confirm.*cuanto|qué.*porcent/, fn: () => rPorcentajeConfirmacion(d) },
+    { tema: 'prueba', re: /prueba|registro.*test|e2e|sintet|example|sintetico/, fn: () => rPrueba(d) },
   ];
   for (const regla of reglas) {
     if (regla.re.test(t)) {
@@ -650,4 +888,129 @@ export function nuevaConversacion(): Conversacion {
 export function titularDesde(texto: string): string {
   const limpio = texto.trim().replace(/\s+/g, ' ');
   return limpio.length <= 42 ? limpio : `${limpio.slice(0, 42)}…`;
+}
+
+/* ---------- generador de PDF para informes ---------- */
+
+export async function pdfDesdeInforme(informe: InformeArmado): Promise<Blob> {
+  // jsPDF se carga dinámicamente para ser compatible con ESM del proyecto.
+  const { jsPDF } = await import('jspdf');
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const margin = 20;
+      const contentWidth = pageWidth - margin * 2;
+
+      let y = margin;
+
+      // --- Título ---
+      doc.setFontSize(20);
+      doc.setFont('helvetica', 'bold');
+      doc.text('XV-ANTONELLA · Informe', margin, y);
+      y += 12;
+
+      // --- Subtítulo con tipo y fecha ---
+      doc.setFontSize(12);
+      doc.setFont('helvetica', 'normal');
+      const fechaStr = new Date(informe.stamp).toLocaleDateString('es-AR', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+      doc.text(`Tipo: ${informe.tipo} · Generado: ${fechaStr}`, margin, y);
+      y += 8;
+
+      // --- Resumen ejecutivo (líneas del informe) ---
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'normal');
+      for (const s of informe.secciones) {
+        if (y > doc.internal.pageSize.getHeight() - 30) {
+          doc.addPage();
+          y = margin;
+        }
+        doc.setFont('helvetica', 'bold');
+        doc.text(s.titulo, margin, y);
+        y += 7;
+        doc.setFont('helvetica', 'normal');
+        for (const l of s.lineas) {
+          if (y > doc.internal.pageSize.getHeight() - 30) {
+            doc.addPage();
+            y = margin;
+          }
+          doc.text(l, margin, y);
+          y += 5;
+        }
+        // Tabla si existe
+        if (s.tabla) {
+          if (y > doc.internal.pageSize.getHeight() - 40) {
+            doc.addPage();
+            y = margin;
+          }
+          // Cabecera de tabla
+          doc.setFont('helvetica', 'bold');
+          const colsWidth = (contentWidth / s.tabla.cols.length) | 0;
+          let xStart = margin;
+          s.tabla.cols.forEach((c, ci) => {
+            doc.text(c, xStart, y);
+            xStart += colsWidth;
+          });
+          y += 7;
+          doc.setFont('helvetica', 'normal');
+          // Filas
+          for (const fila of s.tabla.filas) {
+            if (y > doc.internal.pageSize.getHeight() - 30) {
+              doc.addPage();
+              y = margin;
+            }
+            let xf = margin;
+            fila.forEach((v, fi) => {
+              doc.text(String(v), xf, y);
+              xf += colsWidth;
+            });
+            y += 6;
+          }
+        }
+      }
+
+      // --- Limitaciones ---
+      if (y > doc.internal.pageSize.getHeight() - 30) {
+        doc.addPage();
+        y = margin;
+      }
+      doc.setFont('helvetica', 'bold');
+      doc.text('Limitaciones', margin, y);
+      y += 7;
+      doc.setFont('helvetica', 'normal');
+      for (const l of informe.limitaciones) {
+        if (y > doc.internal.pageSize.getHeight() - 30) {
+          doc.addPage();
+          y = margin;
+        }
+        doc.text(l, margin, y);
+        y += 5;
+      }
+
+      // --- Footer en cada página ---
+      const lastPage = doc.getNumberOfPages();
+      for (let i = 1; i <= lastPage; i++) {
+        doc.setPage(i);
+        doc.setFontSize(8);
+        doc.setFont('helvetica', 'italic');
+        doc.text(
+          'XV-ANTONELLA - Datos actuales de Supabase - Montos en ARS',
+          margin,
+          doc.internal.pageSize.getHeight() - 10,
+        );
+      }
+
+      // --- Generar Blob ---
+      const pdfBlob = doc.output('blob');
+      resolve(pdfBlob);
+    } catch (e) {
+      reject(e);
+    }
+  });
 }

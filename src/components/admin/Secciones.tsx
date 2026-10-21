@@ -10,6 +10,7 @@ import {
   responderLibre,
   titularDesde,
   verificarConsistencia,
+  pdfDesdeInforme,
   type ContextoChat,
   type Conversacion,
   type DatosAsistente,
@@ -1326,6 +1327,8 @@ export function Asistente({ ctx }: { ctx: Ctx }) {
   const [tituloTmp, setTituloTmp] = useState('');
   const [informe, setInforme] = useState<InformeArmado | null>(null);
   const [tipoInforme, setTipoInforme] = useState<InformeArmado['tipo']>('general');
+  const [pdfBlob, setPdfBlob] = useState<Blob | null>(null);
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const finRef = useRef<HTMLDivElement>(null);
   const [modo, setModo] = useState<'remoto' | 'local' | 'desconocido'>('desconocido');
   const [notaSync, setNotaSync] = useState<string | null>(null);
@@ -1601,7 +1604,7 @@ export function Asistente({ ctx }: { ctx: Ctx }) {
     }
   };
 
-  const armarInforme = (tipo: InformeArmado['tipo'], base?: Conversacion[]) => {
+  const armarInforme = async (tipo: InformeArmado['tipo'], base?: Conversacion[]) => {
     const lista = base ?? chats;
     const target = lista.find((c) => c.id === chatId);
     if (!target) return;
@@ -1624,6 +1627,16 @@ export function Asistente({ ctx }: { ctx: Ctx }) {
     const doc = construirInforme(tipo, datos, auditsMini, nombreVista);
     setTipoInforme(tipo);
     setInforme(doc);
+    // Generar PDF y crear URL de descarga
+    let pdfBlob: Blob | null = null;
+    let pdfUrl: string | null = null;
+    try {
+      pdfBlob = await pdfDesdeInforme(doc);
+      pdfUrl = URL.createObjectURL(pdfBlob);
+    } catch (e) {
+      console.error('Error generando PDF:', e);
+      setNota('No se pudo generar el PDF: ' + (e instanceof Error ? e.message : 'error desconocido'));
+    }
     persistir(
       agregarAsistente(lista, target.id, {
         texto: `Informe “${tipo}” generado con datos de ${doc.stamp}.`,
@@ -1632,6 +1645,9 @@ export function Asistente({ ctx }: { ctx: Ctx }) {
         tema: `informe-${tipo}`,
       }),
     );
+    // Guardar referencias para usar en el renderizado
+    setPdfBlob(pdfBlob);
+    setPdfUrl(pdfUrl);
   };
 
   const reintentar = () => {
@@ -1905,7 +1921,7 @@ export function Asistente({ ctx }: { ctx: Ctx }) {
         </div>
       )}
 
-      {informe && <InformeDoc informe={informe} onCerrar={() => setInforme(null)} />}
+      {informe && <InformeDoc informe={informe} pdfUrl={pdfUrl} onCerrar={() => setInforme(null)} />}
 
       {ctx.m.inconsistencias.length > 0 && (
         <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4">
@@ -1923,7 +1939,7 @@ export function Asistente({ ctx }: { ctx: Ctx }) {
 
 /* ---------- Documento de informe (imprimible → PDF) ---------- */
 
-function InformeDoc({ informe, onCerrar }: { informe: InformeArmado; onCerrar: () => void }) {
+function InformeDoc({ informe, pdfUrl, onCerrar }: { informe: InformeArmado; pdfUrl: string | null; onCerrar: () => void }) {
   useEffect(() => {
     document.body.classList.add('imprimiendo-informe');
     return () => document.body.classList.remove('imprimiendo-informe');
@@ -1932,12 +1948,23 @@ function InformeDoc({ informe, onCerrar }: { informe: InformeArmado; onCerrar: (
   return (
     <div className="zona-informe mt-4 rounded-xl border border-stone-300 bg-white p-6">
       <div className="no-imprimir mb-3 flex flex-wrap gap-2">
-        <button
-          onClick={() => window.print()}
-          className="rounded-full bg-[#183b2d] px-5 py-2 text-xs font-medium text-white"
-        >
-          Imprimir / Guardar PDF
-        </button>
+        {pdfUrl ? (
+          <a
+            href={pdfUrl}
+            download="informe-xv-antonella.pdf"
+            className="rounded-full bg-[#183b2d] px-5 py-2 text-xs font-medium text-white"
+            target="_blank"
+          >
+            Descargar PDF
+          </a>
+        ) : (
+          <button
+            onClick={() => window.print()}
+            className="rounded-full bg-[#183b2d] px-5 py-2 text-xs font-medium text-white"
+          >
+            Imprimir / Guardar PDF
+          </button>
+        )}
         <button onClick={onCerrar} className="rounded-full border border-stone-300 px-5 py-2 text-xs">
           Cerrar informe
         </button>
