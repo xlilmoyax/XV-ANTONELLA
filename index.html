@@ -2,24 +2,101 @@
 <html lang="es">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta
-      name="description"
-      content="Antonella · Mis XV años · 19 de diciembre de 2026 · Salón Aldo. Confirmá tu asistencia."
-    />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="description" content="Antonella · Mis XV años · Estamos realizando mantenimiento temporal. Volvemos muy pronto." />
+    <meta name="robots" content="noindex, nofollow" />
     <link
       href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Great+Vibes&family=Jost:wght@300;400;500;600&display=swap"
       rel="stylesheet"
     />
     <meta name="theme-color" content="#0e241b" />
-    <link rel="preload" as="image" href="/fondos/bosque-sendero.jpg" fetchpriority="high" />
-    <title>Antonella · Mis XV Años · 19.12.2026</title>
+    <title>Mantenimiento | Antonella · Mis XV Años</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #0e241b;
+        font-family: 'Jost', 'Cormorant Garamond', serif;
+        color: #ffffff;
+        text-align: center;
+        padding: 2rem;
+      }
+      .container {
+        max-width: 600px;
+        padding: 3rem 2rem;
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 24px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        backdrop-filter: blur(10px);
+      }
+      .logo {
+        font-family: 'Great Vibes', cursive;
+        font-size: 3.5rem;
+        color: #d4af37;
+        margin-bottom: 1.5rem;
+        text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+      }
+      h1 {
+        font-family: 'Cormorant Garamond', serif;
+        font-size: 2.25rem;
+        font-weight: 600;
+        margin-bottom: 1rem;
+        color: #ffffff;
+      }
+      p {
+        font-family: 'Jost', sans-serif;
+        font-size: 1.125rem;
+        line-height: 1.6;
+        color: #cbd5e1;
+        margin-bottom: 2rem;
+      }
+      .spinner {
+        width: 48px;
+        height: 48px;
+        border: 3px solid rgba(212, 175, 55, 0.3);
+        border-top-color: #d4af37;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        margin: 0 auto;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .footer {
+        margin-top: 2rem;
+        font-family: 'Jost', sans-serif;
+        font-size: 0.875rem;
+        color: #94a3b8;
+      }
+      .date {
+        font-family: 'Cormorant Garamond', serif;
+        font-size: 1.25rem;
+        color: #d4af37;
+        margin-bottom: 0.5rem;
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+    <div class="container">
+      <div class="logo">Antonella</div>
+      <div class="date">Mis XV Años · 19 de diciembre de 2026</div>
+      <h1>Mantenimiento Temporal</h1>
+      <p>
+        Estamos realizando mejoras y mantenimiento técnico en el sitio.
+        Volvemos a estar <strong>prontos</strong> con todo operativo.
+      </p>
+      <div class="spinner"></div>
+      <div class="footer">Gracias por tu paciencia</div>
+    </div>
   </body>
 </html>
