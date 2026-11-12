@@ -1327,7 +1327,7 @@ export function Asistente({ ctx }: { ctx: Ctx }) {
   const [tituloTmp, setTituloTmp] = useState('');
   const [informe, setInforme] = useState<InformeArmado | null>(null);
   const [tipoInforme, setTipoInforme] = useState<InformeArmado['tipo']>('general');
-  const [pdfBlob, setPdfBlob] = useState<Blob | null>(null);
+  const [, setPdfBlob] = useState<Blob | null>(null);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const finRef = useRef<HTMLDivElement>(null);
   const [modo, setModo] = useState<'remoto' | 'local' | 'desconocido'>('desconocido');
@@ -1635,7 +1635,7 @@ export function Asistente({ ctx }: { ctx: Ctx }) {
       pdfUrl = URL.createObjectURL(pdfBlob);
     } catch (e) {
       console.error('Error generando PDF:', e);
-      setNota('No se pudo generar el PDF: ' + (e instanceof Error ? e.message : 'error desconocido'));
+      setNotaSync('No se pudo generar el PDF: ' + (e instanceof Error ? e.message : 'error desconocido'));
     }
     persistir(
       agregarAsistente(lista, target.id, {

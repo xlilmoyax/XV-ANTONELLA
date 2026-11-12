@@ -14,6 +14,8 @@
 
 import { formatoARS } from './pricing';
 import type { AjustesEvento, Metricas } from './metricas';
+import type { Guest } from './types';
+import { TEXTO_PAGO } from '../components/admin/util';
 
 export interface Destino {
   tab: string;
@@ -415,7 +417,7 @@ function rRegistrosSinModalidad(d: DatosAsistente): RespuestaEstructurada {
       lineas.push(`   - ${g.nombre_apellido} (${g.email})`);
     });
     if (sinModalidad.length > 10) lineas.push(`   …y ${sinModalidad.length - 10} más.`);
-    const totalPers = (sinModalidad.reduce((a, g) => a + (g.cantidad_adultos ?? 0 + g.cantidad_menores ?? 0), 0));
+    const totalPers = sinModalidad.reduce((a, g) => a + (g.cantidad_adultos + g.cantidad_menores), 0);
     lineas.push(`   Total personas sin modalidad: ${totalPers}.`);
   } else {
     lineas.push('No hay confirmados sin modalidad asignada.');
@@ -953,7 +955,7 @@ export async function pdfDesdeInforme(informe: InformeArmado): Promise<Blob> {
           doc.setFont('helvetica', 'bold');
           const colsWidth = (contentWidth / s.tabla.cols.length) | 0;
           let xStart = margin;
-          s.tabla.cols.forEach((c, ci) => {
+          s.tabla.cols.forEach((c) => {
             doc.text(c, xStart, y);
             xStart += colsWidth;
           });
@@ -966,7 +968,7 @@ export async function pdfDesdeInforme(informe: InformeArmado): Promise<Blob> {
               y = margin;
             }
             let xf = margin;
-            fila.forEach((v, fi) => {
+            fila.forEach((v) => {
               doc.text(String(v), xf, y);
               xf += colsWidth;
             });
